@@ -1,83 +1,89 @@
-# 🍔 Food Delivery App: Automated Analytics & Anomaly Detection Pipeline
+# 🍔 Unlocking the Delivery App: Turning Raw Clicks into Revenue
 
-![Domain](https://img.shields.io/badge/Domain-Food_Tech_%26_Delivery-FF4B4B)
-![Role](https://img.shields.io/badge/Role-Product_Analyst_%2F_Data_Engineer-2E86C1)
-![Tech](https://img.shields.io/badge/Tech_Stack-MySQL_8.0_%7C_Advanced_SQL-F39C12)
+<div align="center">
+  <img src="https://via.placeholder.com/800x400/1a1a1a/ff4b4b?text=+[Insert+Animated+GIF+of+Your+Dashboard+Here]+" alt="Dashboard Animation" />
+</div>
 
-## 📌 The Business Problem
-A food delivery platform was generating millions of rows of clickstream events and transactions, but the data was siloed. The business lacked a unified view of the user journey. They could not definitively answer:
-1. Where are users dropping off before paying?
-2. Which user segments are actually driving long-term revenue?
-3. How quickly can we detect an app outage or a localized surge in orders?
+<br>
 
-**The Solution:** This project transforms a massive, raw data dump into a 5-stage automated SQL pipeline. It reconstructs sessions, maps conversion funnels, tracks 8-week cohorts, and deploys a statistical anomaly detection engine to flag real-time business risks.
-
----
-
-## 🗂️ The Data Lineage: From Raw CSVs to Business Insights
-
-The entire pipeline is built on a foundation of **4 Raw Input Tables** loaded directly from CSVs, which are then processed to create highly specialized **Derived Tables** for analytics.
-
-
-
-### 1️⃣ Data Ingestion & Setup (`01_Data_Ingestion_and_QA`)
-* **The Input:** 4 raw CSV files.
-* **The Process:** We create the foundational database schema and load the data. To enable time-series analysis, we concatenate separate `DATE` and `TIME` columns into robust `DATETIME` columns and build composite indexes for query optimization.
-* **The Output:** 4 clean, indexed base tables: `users`, `restaurants`, `events`, and `orders`.
-
-### 2️⃣ Session & Funnel Engine (`02_Session_and_Funnel_Analysis`)
-* **The Input:** Base tables (`events`, `orders`, `users`).
-* **The Why:** Raw clicks are meaningless without context. We need to group clicks into logical "visits" and see exactly when a user hits a specific funnel stage (Browse → View Menu → Cart → Checkout → Pay).
-* **The Process:** * Uses window functions (`LAG()`) to apply a **30-minute inactivity rule**, generating unique session IDs.
-    * Uses `MIN(CASE WHEN...)` to extract the *canonical* (absolute first) timestamp a user reached each funnel stage.
-* **The Output (Derived Tables):**
-    * `user_first_stages`: A flattened timeline of exactly when each user hit each stage.
-    * `funnel_summary`: Aggregated conversion percentages.
-    * `time_to_step_stats`: The median time it takes users to move between stages.
-
-
-
-### 3️⃣ Cohort Retention (`03_Weekly_Cohort_Retention`)
-* **The Input:** `users` (signup dates) and `events` (activity dates).
-* **The Why:** To measure product stickiness. Are users coming back after their first week? 
-* **The Process:** Groups users by their signup week (Monday start) and uses conditional aggregation to calculate the percentage of those users who return to the app in Weeks 1 through 8.
-* **The Output (Derived Table):** `cohort_weekly_retention` (The definitive 8-week loyalty matrix).
-
-
-
-### 4️⃣ User Segmentation (`04_User_Segmentation`)
-* **The Input:** Derived tables (`user_first_stages`, base `users`, `orders`).
-* **The Why:** High-level averages hide the truth. We need to know if iOS users convert better than Android users, or if Instagram brings in more valuable customers than Organic Search.
-* **The Process:** Joins demographic and acquisition data to the funnel and revenue logic, slicing the metrics into distinct categories.
-* **The Output (Derived Tables):** * `segment_funnel_summary`
-    * `segment_revenue_summary`
-    * `segment_retention_summary`
-
-### 5️⃣ Anomaly Detection Engine (`05_Anomaly_Detection_and_Alerts`)
-* **The Input:** All historical event and order data.
-* **The Why:** The business needs to move from reactive to proactive. If checkout conversion drops by 30% today, the product team needs to know immediately, not next week.
-* **The Process:** * Calculates a dynamic **7-day trailing baseline** (`AVG() OVER(ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING)`).
-    * Compares today's actuals against the baseline. Flags a `SPIKE` if deviation is > +30%, and a `DROP` if < -25%.
-* **The Output (Derived Tables):**
-    * `daily_activity_metrics` & `daily_baselines`.
-    * `daily_anomaly_flags`: The automated alerts.
-    * `insights_summary`: A human-readable feed of the most critical spikes, drops, and bottlenecks, sorted by severity.
-
-
+<div align="center">
+  <img src="https://img.shields.io/badge/SQL-Advanced%20MySQL%208.0-F39C12?style=for-the-badge&logo=mysql&logoColor=white" />
+  <img src="https://img.shields.io/badge/Focus-Product%20Analytics-2E86C1?style=for-the-badge&logo=googleanalytics&logoColor=white" />
+  <img src="https://img.shields.io/badge/Status-Pipeline%20Deployed-27AE60?style=for-the-badge&logo=checkmarx&logoColor=white" />
+</div>
 
 ---
 
-## 🏆 Core Business Findings
+## 💡 Why I Built This (The "Aha!" Moment)
 
-By running this pipeline, the `insights_summary` table generated three critical, data-backed findings for the business:
+Imagine you run a massive food delivery app. Today, 300,000 people opened your app. Some looked at burgers, some added pizza to their cart, and some actually paid. 
 
-1.  **The Checkout Bottleneck:** The largest friction point in the user journey is the Checkout-to-Payment stage. Over **54%** of users abandon their carts after initiating checkout (Only 45.2% complete payment).
-2.  **The "Golden" Demographic:** The 25–34 age demographic is the primary economic driver, and users acquired via Instagram exhibit the highest overall Week-1 retention (44.24%). 
-3.  **Automated Incident Detection:** The anomaly engine successfully flagged a localized +3,699% revenue spike in Pune, as well as a catastrophic tracking drop for the 2023-W26 cohort, proving the alerting system works.
+The problem? **Businesses drown in this data but starve for clarity.** If the checkout page breaks, or if a specific city's orders suddenly drop by 50%, the company usually finds out *days* later when the revenue report looks bad. By then, the money is gone. 
+
+I built this 5-stage automated SQL pipeline to solve that exact problem. I wanted to take chaotic, messy data and turn it into a **living, breathing command center** that tells the business exactly what is broken, who our best customers are, and where we are losing money.
 
 ---
 
-## 🛠️ Technical Implementation
-* **Language:** Advanced MySQL 8.0
-* **Key Functions:** `LAG()`, `SUM() OVER()`, Conditional Aggregation (`SUM(CASE WHEN...)`), Composite Indexing, Rolling Window Functions, Common Table Expressions (CTEs).
-* **Full Documentation:** See the `docs/` folder for comprehensive QA checks, row counts, and detailed UX recommendations.
+## 🧱 The Raw Materials (What Went In)
+Before we can cook, we need groceries. The pipeline starts with 4 massive, raw CSV files. 
+
+| Raw Table | What's Inside? (Key Columns) | Why It Matters |
+| :--- | :--- | :--- |
+| 🧑‍🦱 `users` | `user_id`, `age`, `gender`, `city`, `acquisition_channel` | Tells us *who* the customer is. |
+| 🏪 `restaurants` | `restaurant_id`, `city`, `category` | Tells us *what* they are buying. |
+| 🖱️ `events` | `user_id`, `event_type`, `event_datetime` | The digital footprints. Every single click. |
+| 💳 `orders` | `order_id`, `user_id`, `order_amount`, `order_status` | The actual money being made. |
+
+📂 **See the Foundation:** Check out [`01_Data_Ingestion_and_QA/sql/01_schema_and_qa.sql`](./01_Data_Ingestion_and_QA/sql/01_schema_and_qa.sql) to see how I built the schema, cleaned the datetimes, and set up the structural indexes.
+
+---
+
+## 🗺️ Stage 2: The Funnel (Connecting the Dots)
+**The Concept:** On an app, you just see a database of isolated clicks. I built a "Session Engine" that assumes if a user goes quiet for 30 minutes, they left the app. This groups their random clicks into a logical "Visit." Then, I mapped their exact journey: `Homepage ➡️ View Menu ➡️ Add to Cart ➡️ Checkout ➡️ Payment.`
+
+* **The Impact:** I discovered that over **54% of users abandon their carts at Checkout.** Now the product team knows *exactly* which screen to fix to instantly boost revenue.
+
+<div align="center">
+  <img src="https://via.placeholder.com/600x300/f4f4f4/333333?text=+[Insert+Funnel+Drop-off+Chart+Here]+" alt="Funnel Chart" />
+</div>
+
+📂 **Dive into the Code:** See how I used complex `LAG()` window functions to build the session engine in [`02_Session_and_Funnel_Analysis/sql/02_funnel_engine.sql`](./02_Session_and_Funnel_Analysis/sql/02_funnel_engine.sql).
+
+---
+
+## 🤝 Stage 3: Cohort Retention (The Loyalty Test)
+**The Concept:** Retention asks: *If 100 people signed up in January, how many are still ordering food in March?* I used complex SQL pivot logic to track users for 8 full weeks after their first order.
+
+* **The Impact:** We can now see if a new marketing campaign actually brought in loyal customers, or just people who used a promo code once and never came back.
+
+📂 **Dive into the Code:** Check out the massive pivot tables tracking Week 0 to Week 8 loyalty in [`03_Cohort_Retention/sql/03_weekly_cohorts.sql`](./03_Cohort_Retention/sql/03_weekly_cohorts.sql).
+
+---
+
+## 🎯 Stage 4: Segmentation (Knowing the VIPs)
+**The Concept:** Averages are dangerous. I sliced the funnel and revenue data by age, device, city, and how they found the app (Instagram vs. Google). 
+
+* **The Impact:** I found that users aged 25-34 acquired via Instagram are our absolute VIPs. The marketing team can now stop wasting ad money on generic channels and double down on Instagram.
+
+📂 **Dive into the Code:** See how I broke down conversion rates by demographics in [`04_User_Segmentation/sql/04_segmentation.sql`](./04_User_Segmentation/sql/04_segmentation.sql).
+
+---
+
+## 🚨 Stage 5: Anomaly Detection (The Smoke Alarm)
+**The Concept:** Anomaly detection is a digital smoke alarm. I wrote a SQL engine that calculates a "rolling 7-day average" for our app's traffic. Every single day, the engine checks: *Is today's traffic normal compared to last week?* If it drops by more than 25%, the system throws a red flag.
+
+* **The Impact:** This transforms a data team from "historians" into "first responders." Instead of staring at charts, the CEO gets a feed that says: 🔴 **HIGH ALERT:** `Checkout events dropped by 45% in Pune on June 28th.`
+
+<div align="center">
+  <img src="https://via.placeholder.com/600x300/ffeaea/ff0000?text=+[Insert+Anomaly+Spike/Drop+Chart+Here]+" alt="Anomaly Chart" />
+</div>
+
+📂 **Dive into the Code:** See the dynamic trailing window baselines in action in [`05_Anomaly_Detection_and_Alerts/sql/05_anomaly_engine.sql`](./05_Anomaly_Detection_and_Alerts/sql/05_anomaly_engine.sql).
+
+---
+
+## 👨‍💻 About the Author: Mohith
+This project bridges the gap between raw data and executive decision-making. With a background blending a **B.Com & MBA** with a **Data Analyst Internship**, my goal is never just to write code—it's to solve business problems. 
+
+**Tech Stack Used:** SQL, Python, Power BI, Tableau, Excel. 
+*Check out the `docs/` folder for my full PDF report on UX and Strategy recommendations based on these findings.*
