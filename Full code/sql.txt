@@ -1,0 +1,4474 @@
+-- SQL version: MySQL 8.0
+/* =========================================================
+PROJECT 1 — DATABASE & DATA QUALITY SETUP
+Purpose:
+1) Create the core schema (users, restaurants, events, orders).
+2) Load CSV data into each table.
+3) Run basic data-quality checks:
+- Row counts
+- NULLs in mandatory columns
+- Duplicate primary keys
+- Orphan foreign keys
+- Session ID quality
+========================================================= */
+----------------------------------------------------------
+-- A. DATABASE CREATION
+----------------------------------------------------------
+CREATE DATABASE IF NOT EXISTS project1
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_general_ci;
+USE project1;
+----------------------------------------------------------
+-- B. CORE TABLE DEFINITIONS
+----------------------------------------------------------
+-- 1) Users table: one row per registered user
+CREATE TABLE IF NOT EXISTS users
+(
+user_id INT NOT NULL,
+signup_date DATE NOT NULL,
+signup_time TIME NOT NULL,
+device VARCHAR(20) NOT NULL,
+acquisition_channel VARCHAR(50) NOT NULL,
+age INT NOT NULL,
+gender VARCHAR(10) NOT NULL,
+city VARCHAR(100) NOT NULL,
+churn_7d TINYINT(1) NOT NULL, -- 1 = churned within 7 days
+first_order_date DATE NULL,
+first_order_time TIME NULL,
+PRIMARY KEY (user_id)
+);
+-- 2) Restaurants table: one row per restaurant
+CREATE TABLE IF NOT EXISTS restaurants
+(
+restaurant_id INT NOT NULL,
+restaurant_name VARCHAR(100) NOT NULL,
+restaurant_category VARCHAR(100) NOT NULL,
+restaurant_rating DECIMAL(2, 1) NOT NULL,
+avg_delivery_min INT NOT NULL,
+PRIMARY KEY (restaurant_id)
+);
+-- 3) Events table: granular app events (page views, add-to-cart, etc.)
+CREATE TABLE IF NOT EXISTS events
+(
+event_id CHAR(36) NOT NULL, -- typically a UUID
+user_id INT NOT NULL,
+event_type VARCHAR(50) NOT NULL,
+event_date DATE NOT NULL,
+event_time TIME NOT NULL,
+session_id VARCHAR(50) NOT NULL, -- may be incomplete; checked later
+restaurant_id INT NULL,
+product_price DECIMAL(10, 2),
+quantity INT,
+PRIMARY KEY (event_id)
+);
+-- 4) Orders table: one row per order/checkout
+CREATE TABLE IF NOT EXISTS orders
+(
+order_id INT NOT NULL,
+user_id INT NOT NULL,
+order_date DATE NOT NULL,
+order_time TIME NOT NULL,
+restaurant_id INT NOT NULL, -- made nullable in FK step
+order_value DECIMAL(10, 2) NOT NULL,
+payment_method VARCHAR(50) NOT NULL,
+items_count INT NOT NULL,
+delivery_time_min INT NOT NULL,
+success TINYINT(1) NOT NULL, -- 1 = successful order
+PRIMARY KEY (order_id)
+);
+----------------------------------------------------------
+-- C. FOREIGN KEY CONSTRAINTS
+----------------------------------------------------------
+-- events → users, restaurants
+ALTER TABLE events
+ADD CONSTRAINT fk_events_user
+FOREIGN KEY (user_id)
+REFERENCES users (user_id)
+ON DELETE CASCADE,
+ADD CONSTRAINT fk_events_restaurant
+FOREIGN KEY (restaurant_id)
+REFERENCES restaurants (restaurant_id)
+ON DELETE SET NULL;
+-- orders → users, restaurants
+-- Step 1: allow restaurant_id to be NULL so we can safely ON DELETE SET NULL
+ALTER TABLE orders
+MODIFY restaurant_id INT NULL;
+-- Step 2: define FKs from orders to users/restaurants
+ALTER TABLE orders
+ADD CONSTRAINT fk_orders_user
+FOREIGN KEY (user_id)
+REFERENCES users (user_id)
+ON DELETE CASCADE;
+ALTER TABLE orders
+ADD CONSTRAINT fk_orders_restaurant
+FOREIGN KEY (restaurant_id)
+REFERENCES restaurants (restaurant_id)
+ON DELETE SET NULL;
+----------------------------------------------------------
+-- D. DATA LOAD FROM CSV FILES
+-- NOTE: Update file paths if your CSVs live in a
+-- different folder on your machine.
+----------------------------------------------------------
+-- 1) Restaurants
+LOAD DATA LOCAL INFILE 'D:/downloads/my project 1 for product for CSV - Copy/restaurants.csv'
+INTO TABLE restaurants
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\r\n'
+IGNORE 1 LINES
+(restaurant_id,
+restaurant_name,
+restaurant_category,
+restaurant_rating,
+avg_delivery_min);
+-- 2) Users
+LOAD DATA LOCAL INFILE 'D:/downloads/my project 1 for product for CSV - Copy/users.csv'
+INTO TABLE users
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 LINES
+(user_id,
+signup_date,
+signup_time,
+device,
+acquisition_channel,
+age,
+gender,
+city,
+churn_7d,
+first_order_date,
+first_order_time);
+-- 3) Orders
+LOAD DATA LOCAL INFILE 'D:/downloads/my project 1 for product for CSV - Copy/orders.csv'
+INTO TABLE orders
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 LINES
+(order_id,
+user_id,
+order_date,
+order_time,
+restaurant_id,
+order_value,
+payment_method,
+items_count,
+delivery_time_min,
+success);
+-- 4) Events
+LOAD DATA LOCAL INFILE 'D:/downloads/my project 1 for product for CSV - Copy/events.csv'
+INTO TABLE events
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 LINES
+(event_id,
+user_id,
+event_type,
+event_date,
+event_time,
+session_id,
+restaurant_id,
+product_price,
+quantity);
+----------------------------------------------------------
+-- E. QUICK RELATIONSHIP & SAMPLE CHECKS
+----------------------------------------------------------
+-- 1) Orders that reference a restaurant not present in `restaurants`
+SELECT
+o.order_id,
+o.restaurant_id
+FROM orders AS o
+LEFT JOIN restaurants AS r
+ON o.restaurant_id = r.restaurant_id
+WHERE r.restaurant_id IS NULL;
+-- 2) Orders that reference a user not present in `users`
+SELECT
+o.order_id,
+o.user_id
+FROM orders AS o
+LEFT JOIN users AS u
+ON o.user_id = u.user_id
+WHERE u.user_id IS NULL;
+-- 3) Events that reference a restaurant not present in `restaurants`
+SELECT
+e.event_id,
+e.restaurant_id
+FROM events AS e
+LEFT JOIN restaurants AS r
+ON e.restaurant_id = r.restaurant_id
+WHERE r.restaurant_id IS NULL;
+-- 4) Events that reference a user not present in `users`
+SELECT
+e.event_id,
+e.user_id
+FROM events AS e
+LEFT JOIN users AS u
+ON e.user_id = u.user_id
+WHERE u.user_id IS NULL;
+-- 5) Sample: orders and events per user (first 20 users)
+SELECT
+u.user_id,
+u.city,
+COUNT(DISTINCT o.order_id) AS orders_count,
+COUNT(DISTINCT e.event_id) AS events_count
+FROM users AS u
+LEFT JOIN orders AS o
+ON u.user_id = o.user_id
+LEFT JOIN events AS e
+ON u.user_id = e.user_id
+GROUP BY u.user_id, u.city
+ORDER BY u.user_id
+LIMIT 20;
+----------------------------------------------------------
+-- F. ROW COUNTS + DISTINCT PRIMARY KEYS (COMPACT SUMMARY)
+----------------------------------------------------------
+SELECT 'orders' AS table_name,
+COUNT(*) AS row_count,
+COUNT(DISTINCT order_id) AS distinct_pk_count
+FROM orders
+UNION ALL
+SELECT 'events' AS table_name,
+COUNT(*) AS row_count,
+COUNT(DISTINCT event_id) AS distinct_pk_count
+FROM events
+UNION ALL
+SELECT 'users' AS table_name,
+COUNT(*) AS row_count,
+COUNT(DISTINCT user_id) AS distinct_pk_count
+FROM users
+UNION ALL
+SELECT 'restaurants' AS table_name,
+COUNT(*) AS row_count,
+COUNT(DISTINCT restaurant_id) AS distinct_pk_count
+FROM restaurants;
+----------------------------------------------------------
+-- G. DIRECT NULL CHECKS ON DATE FIELDS (ROW-LEVEL VIEW)
+----------------------------------------------------------
+-- Users with missing signup_date
+SELECT *
+FROM users
+WHERE signup_date IS NULL;
+-- Orders with missing order_date
+SELECT *
+FROM orders
+WHERE order_date IS NULL;
+-- Events with missing event_date
+SELECT *
+FROM events
+WHERE event_date IS NULL;
+----------------------------------------------------------
+-- H. NULL VALIDATION FOR MANDATORY COLUMNS (SUMMARY)
+----------------------------------------------------------
+/*
+Mandatory Columns:
+users: user_id, signup_date, signup_time
+events: event_id, user_id, event_date, event_time
+orders: order_id, user_id, order_date, order_time
+restaurants: restaurant_id
+*/
+-- 1) Users
+SELECT 'users_missing_mandatory' AS check_name,
+COUNT(*) AS null_count
+FROM users
+WHERE user_id IS NULL
+OR signup_date IS NULL
+OR signup_time IS NULL;
+-- 2) Events
+SELECT 'events_missing_mandatory' AS check_name,
+COUNT(*) AS null_count
+FROM events
+WHERE event_id IS NULL
+OR user_id IS NULL
+OR event_date IS NULL
+OR event_time IS NULL;
+-- 3) Orders
+SELECT 'orders_missing_mandatory' AS check_name,
+COUNT(*) AS null_count
+FROM orders
+WHERE order_id IS NULL
+OR user_id IS NULL
+OR order_date IS NULL
+OR order_time IS NULL;
+-- 4) Restaurants
+SELECT 'restaurants_missing_mandatory' AS check_name,
+COUNT(*) AS null_count
+FROM restaurants
+WHERE restaurant_id IS NULL;
+----------------------------------------------------------
+-- I. DUPLICATE PRIMARY KEY VALIDATION
+----------------------------------------------------------
+-- 1) Duplicate user_id in users
+SELECT 'users_dup_pk' AS check_name,
+COUNT(*) AS duplicate_count
+FROM (
+SELECT user_id
+FROM users
+GROUP BY user_id
+HAVING COUNT(*) > 1
+) AS duplicates;
+-- 2) Duplicate event_id in events
+SELECT 'events_dup_pk' AS check_name,
+COUNT(*) AS duplicate_count
+FROM (
+SELECT event_id
+FROM events
+GROUP BY event_id
+HAVING COUNT(*) > 1
+) AS duplicates;
+-- 3) Duplicate order_id in orders
+SELECT 'orders_dup_pk' AS check_name,
+COUNT(*) AS duplicate_count
+FROM (
+SELECT order_id
+FROM orders
+GROUP BY order_id
+HAVING COUNT(*) > 1
+) AS duplicates;
+-- 4) Duplicate restaurant_id in restaurants
+SELECT 'restaurants_dup_pk' AS check_name,
+COUNT(*) AS duplicate_count
+FROM (
+SELECT restaurant_id
+FROM restaurants
+GROUP BY restaurant_id
+HAVING COUNT(*) > 1
+) AS duplicates;
+----------------------------------------------------------
+-- J. ORPHAN FOREIGN-KEY CHECKS (SUMMARY COUNTS)
+----------------------------------------------------------
+/*
+Relationships checked:
+1) events.user_id -> users.user_id
+2) events.restaurant_id (non-NULL) -> restaurants.restaurant_id
+3) orders.user_id -> users.user_id
+4) orders.restaurant_id (non-NULL) -> restaurants.restaurant_id
+*/
+-- 1) Events whose user_id is missing in users
+SELECT 'events_orphan_users' AS check_name,
+COUNT(*) AS orphan_count
+FROM events AS e
+LEFT JOIN users AS u
+ON e.user_id = u.user_id
+WHERE u.user_id IS NULL;
+-- 2) Events whose non-NULL restaurant_id is missing in restaurants
+SELECT 'events_orphan_restaurants' AS check_name,
+COUNT(*) AS orphan_count
+FROM events AS e
+LEFT JOIN restaurants AS r
+ON e.restaurant_id = r.restaurant_id
+WHERE e.restaurant_id IS NOT NULL
+AND r.restaurant_id IS NULL;
+-- 3) Orders whose user_id is missing in users
+SELECT 'orders_orphan_users' AS check_name,
+COUNT(*) AS orphan_count
+FROM orders AS o
+LEFT JOIN users AS u
+ON o.user_id = u.user_id
+WHERE u.user_id IS NULL;
+-- 4) Orders whose non-NULL restaurant_id is missing in restaurants
+SELECT 'orders_orphan_restaurants' AS check_name,
+COUNT(*) AS orphan_count
+FROM orders AS o
+LEFT JOIN restaurants AS r
+ON o.restaurant_id = r.restaurant_id
+WHERE o.restaurant_id IS NOT NULL
+AND r.restaurant_id IS NULL;
+----------------------------------------------------------
+-- K. OPTIONAL: SAMPLE ORPHAN ROW INSPECTION (COMMENTED)
+----------------------------------------------------------
+/*
+-- Sample offending events -> missing users (first 50)
+SELECT e.*
+FROM events AS e
+LEFT JOIN users AS u
+ON e.user_id = u.user_id
+WHERE u.user_id IS NULL
+LIMIT 50;
+-- Sample offending events -> missing restaurants (first 50)
+SELECT e.*
+FROM events AS e
+LEFT JOIN restaurants AS r
+ON e.restaurant_id = r.restaurant_id
+WHERE e.restaurant_id IS NOT NULL
+AND r.restaurant_id IS NULL
+LIMIT 50;
+-- Sample offending orders -> missing users (first 50)
+SELECT o.*
+FROM orders AS o
+LEFT JOIN users AS u
+ON o.user_id = u.user_id
+WHERE u.user_id IS NULL
+LIMIT 50;
+-- Sample offending orders -> missing restaurants (first 50)
+SELECT o.*
+FROM orders AS o
+LEFT JOIN restaurants AS r
+ON o.restaurant_id = r.restaurant_id
+WHERE o.restaurant_id IS NOT NULL
+AND r.restaurant_id IS NULL
+LIMIT 50;
+*/
+----------------------------------------------------------
+-- L. SESSION ID QUALITY CHECK (events table)
+----------------------------------------------------------
+/*
+Outputs:
+events_total = total number of event rows
+events_null_session_count = rows with NULL or empty session_id
+events_distinct_nonnull_sessions = count of distinct non-empty session_id
+*/
+-- 1) Total events
+SELECT 'events_total' AS check_name,
+COUNT(*) AS value
+FROM events;
+-- 2) Events with NULL or empty session_id
+SELECT 'events_null_session_count' AS check_name,
+COUNT(*) AS value
+FROM events
+WHERE session_id IS NULL
+OR session_id = '';
+-- 3) Distinct non-NULL, non-empty session IDs
+SELECT 'events_distinct_nonnull_sessions' AS check_name,
+COUNT(DISTINCT session_id) AS value
+FROM events
+WHERE session_id IS NOT NULL
+AND session_id <> '';
+-- SQL version: MySQL 8.0
+/* ============================================================================
+STEP D — ADD + POPULATE COMBINED DATETIME COLUMNS
+Purpose:
+- Add derived DATETIME columns to make time-based analytics easier:
+* session reconstruction
+* cohorts
+* retention and funnel analysis
+- Keep original DATE and TIME columns (non-destructive).
+Changes:
+- users: ADD signup_datetime, first_order_datetime
+- events: ADD event_datetime
+- orders: ADD order_datetime
+============================================================================ */
+----------------------------------------------------------
+-- D.0) Baseline row counts (for safety)
+----------------------------------------------------------
+SELECT 'users_before' AS label, COUNT(*) AS row_count FROM users;
+SELECT 'events_before' AS label, COUNT(*) AS row_count FROM events;
+SELECT 'orders_before' AS label, COUNT(*) AS row_count FROM orders;
+----------------------------------------------------------
+-- D.1) Add new DATETIME columns (NULL allowed)
+----------------------------------------------------------
+ALTER TABLE users
+ADD COLUMN signup_datetime DATETIME NULL,
+ADD COLUMN first_order_datetime DATETIME NULL;
+ALTER TABLE events
+ADD COLUMN event_datetime DATETIME NULL;
+ALTER TABLE orders
+ADD COLUMN order_datetime DATETIME NULL;
+----------------------------------------------------------
+-- D.2) Populate DATETIME columns using DATE + TIME
+-- TIMESTAMP(date_col, time_col) => NULL if either part is NULL.
+----------------------------------------------------------
+-- users: signup and first order
+UPDATE users
+SET signup_datetime = TIMESTAMP(signup_date, signup_time),
+first_order_datetime = TIMESTAMP(first_order_date, first_order_time);
+-- events: combined event datetime
+UPDATE events
+SET event_datetime = TIMESTAMP(event_date, event_time);
+-- orders: combined order datetime
+UPDATE orders
+SET order_datetime = TIMESTAMP(order_date, order_time);
+----------------------------------------------------------
+-- D.3) Verification: row counts and sample rows
+----------------------------------------------------------
+-- D.3.a) Row counts after updates (should match baseline)
+SELECT 'users_after' AS label, COUNT(*) AS row_count FROM users;
+SELECT 'events_after' AS label, COUNT(*) AS row_count FROM events;
+SELECT 'orders_after' AS label, COUNT(*) AS row_count FROM orders;
+-- D.3.b) Sample users: verify signup_datetime
+SELECT user_id,
+signup_date,
+signup_time,
+signup_datetime
+FROM users
+ORDER BY signup_datetime DESC
+LIMIT 3;
+-- D.3.c) Sample events: verify event_datetime
+SELECT event_id,
+user_id,
+event_date,
+event_time,
+event_datetime
+FROM events
+ORDER BY event_datetime DESC
+LIMIT 5;
+-- D.3.d) Sample orders: verify order_datetime
+SELECT order_id,
+user_id,
+order_date,
+order_time,
+order_datetime
+FROM orders
+ORDER BY order_datetime DESC
+LIMIT 5;
+----------------------------------------------------------
+-- D.4) Combined-datetime NULL and mismatch checks
+----------------------------------------------------------
+-- D.4.a) Users: expect no NULL signup_datetime when signup_date & signup_time exist
+SELECT 'users_signup_missing_combined' AS check_name,
+COUNT(*) AS row_count
+FROM users
+WHERE (signup_date IS NOT NULL OR signup_time IS NOT NULL)
+AND signup_datetime IS NULL;
+-- D.4.b) Users: first_order_datetime can be NULL if no first order
+SELECT 'users_first_order_missing_combined' AS check_name,
+COUNT(*) AS row_count
+FROM users
+WHERE (first_order_date IS NOT NULL OR first_order_time IS NOT NULL)
+AND first_order_datetime IS NULL;
+-- D.4.c) Events: event_datetime should be non-NULL when date/time exist
+SELECT 'events_missing_combined' AS check_name,
+COUNT(*) AS row_count
+FROM events
+WHERE (event_date IS NOT NULL OR event_time IS NOT NULL)
+AND event_datetime IS NULL;
+-- D.4.d) Orders: order_datetime should be non-NULL when date/time exist
+SELECT 'orders_missing_combined' AS check_name,
+COUNT(*) AS row_count
+FROM orders
+WHERE (order_date IS NOT NULL OR order_time IS NOT NULL)
+AND order_datetime IS NULL;
+----------------------------------------------------------
+-- D.5) Exact equality sanity checks
+-- Make sure combined DATETIME equals TIMESTAMP(date, time)
+-- wherever both date and time are non-NULL.
+----------------------------------------------------------
+-- Users: signup_datetime
+SELECT 'users_signup_mismatch' AS check_name,
+COUNT(*) AS row_count
+FROM users
+WHERE signup_date IS NOT NULL
+AND signup_time IS NOT NULL
+AND signup_datetime <> TIMESTAMP(signup_date, signup_time);
+-- Events: event_datetime
+SELECT 'events_mismatch' AS check_name,
+COUNT(*) AS row_count
+FROM events
+WHERE event_date IS NOT NULL
+AND event_time IS NOT NULL
+AND event_datetime <> TIMESTAMP(event_date, event_time);
+-- Orders: order_datetime
+SELECT 'orders_mismatch' AS check_name,
+COUNT(*) AS row_count
+FROM orders
+WHERE order_date IS NOT NULL
+AND order_time IS NOT NULL
+AND order_datetime <> TIMESTAMP(order_date, order_time);
+/* ============================================================================
+STEP E.1 — INDEX TO SPEED UP EVENT QUERIES
+Purpose:
+- Add composite index (user_id, event_datetime) on events.
+- Optimizes queries that:
+* reconstruct sessions
+* compute per-user timelines
+* sort by event_datetime within user
+Notes:
+- Read-only w.r.t. data rows; only adds metadata (index).
+============================================================================ */
+----------------------------------------------------------
+-- E.1.a) Create composite index on events
+----------------------------------------------------------
+CREATE INDEX idx_events_user_datetime
+ON events (user_id, event_datetime);
+----------------------------------------------------------
+-- E.1.b) Quick verification: row count and index presence
+----------------------------------------------------------
+SELECT COUNT(*) AS events_after_index
+FROM events;
+SHOW INDEX FROM events;
+/* ============================================================================
+STEP E.2 — SESSION RECONSTRUCTION (30-MINUTE INACTIVITY RULE)
+Purpose:
+- Rebuild session identifiers using event_datetime.
+- Rule:
+* First event for a user starts a new session.
+* Any gap > 30 minutes from the previous event starts a new session.
+- Output:
+* events.session_id_generated = _
+e.g. 100000_1, 100000_2, ...
+- Non-destructive:
+* Original session_id column remains as-is.
+============================================================================ */
+----------------------------------------------------------
+-- E.2.1) Add column to store generated session IDs
+----------------------------------------------------------
+ALTER TABLE events
+ADD COLUMN session_id_generated VARCHAR(64) NULL;
+----------------------------------------------------------
+-- E.2.2) Drop any previous temporary table (safety)
+----------------------------------------------------------
+DROP TEMPORARY TABLE IF EXISTS tmp_event_sessions;
+----------------------------------------------------------
+-- E.2.3) Build temporary table with session logic
+-- - prev_event_dt: previous event time for the same user
+-- - is_new_session: 1 if first event or gap > 30 mins
+-- - session_no: cumulative sum of is_new_session per user
+----------------------------------------------------------
+CREATE TEMPORARY TABLE tmp_event_sessions AS
+SELECT
+event_id,
+user_id,
+event_datetime,
+prev_event_dt,
+CASE
+WHEN prev_event_dt IS NULL THEN 1
+WHEN TIMESTAMPDIFF(MINUTE, prev_event_dt, event_datetime) > 30 THEN 1
+ELSE 0
+END AS is_new_session,
+SUM(
+CASE
+WHEN prev_event_dt IS NULL THEN 1
+WHEN TIMESTAMPDIFF(MINUTE, prev_event_dt, event_datetime) > 30 THEN 1
+ELSE 0
+END
+) OVER (
+PARTITION BY user_id
+ORDER BY event_datetime, event_id
+ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS session_no
+FROM (
+SELECT
+event_id,
+user_id,
+event_datetime,
+LAG(event_datetime) OVER (
+PARTITION BY user_id
+ORDER BY event_datetime, event_id
+) AS prev_event_dt
+FROM events
+) AS sub;
+----------------------------------------------------------
+-- E.2.4) Index the temporary table on event_id for fast join
+----------------------------------------------------------
+ALTER TABLE tmp_event_sessions
+ADD INDEX idx_tmp_event_sessions_event_id (event_id);
+----------------------------------------------------------
+-- E.2.5) Optional preview: spot-check a few computed sessions
+----------------------------------------------------------
+SELECT
+event_id,
+user_id,
+event_datetime,
+prev_event_dt,
+is_new_session,
+session_no
+FROM tmp_event_sessions
+ORDER BY user_id, event_datetime, event_id
+LIMIT 20;
+----------------------------------------------------------
+-- E.2.6) Update events with generated session IDs
+----------------------------------------------------------
+UPDATE events AS e
+JOIN tmp_event_sessions AS t
+USING (event_id)
+SET e.session_id_generated = CONCAT(t.user_id, '_', t.session_no);
+----------------------------------------------------------
+-- E.2.7) Verification: counts and coverage
+----------------------------------------------------------
+-- A) Ensure total events count unchanged
+SELECT 'events_total' AS check_name,
+COUNT(*) AS value
+FROM events;
+-- B) Ensure session_id_generated populated for all events
+SELECT 'events_session_id_null_count' AS check_name,
+COUNT(*) AS value
+FROM events
+WHERE session_id_generated IS NULL
+OR session_id_generated = '';
+-- C) Distinct reconstructed sessions
+SELECT 'distinct_generated_sessions' AS check_name,
+COUNT(DISTINCT session_id_generated) AS value
+FROM events;
+----------------------------------------------------------
+-- E.2.8) Events-per-session statistics (avg, max, median)
+----------------------------------------------------------
+-- D) Average and max events per session
+WITH events_per_session AS (
+SELECT
+session_id_generated,
+COUNT(*) AS events_per_session
+FROM events
+GROUP BY session_id_generated
+)
+SELECT 'events_per_session_avg' AS metric,
+AVG(events_per_session) AS value
+FROM events_per_session
+UNION ALL
+SELECT 'events_per_session_max' AS metric,
+MAX(events_per_session) AS value
+FROM events_per_session;
+-- E) Median events per session (MySQL 8 window-based approach)
+SELECT 'events_per_session_median' AS metric,
+AVG(events_per_session) AS value
+FROM (
+SELECT
+events_per_session,
+ROW_NUMBER() OVER (ORDER BY events_per_session) AS rn,
+COUNT(*) OVER () AS total_rows
+FROM (
+SELECT COUNT(*) AS events_per_session
+FROM events
+GROUP BY session_id_generated
+) AS x
+) AS y
+WHERE rn IN (
+FLOOR((total_rows + 1) / 2),
+CEIL((total_rows + 1) / 2)
+);
+----------------------------------------------------------
+-- E.2.9) Spot-check: events timeline for a sample user
+----------------------------------------------------------
+-- Pick any user_id present in events; you can replace this with a specific ID if needed.
+SET @sample_user_id := (
+SELECT user_id
+FROM events
+WHERE user_id IS NOT NULL
+LIMIT 1
+);
+SELECT
+event_id,
+user_id,
+event_datetime,
+event_type,
+session_id_generated
+FROM events
+WHERE user_id = @sample_user_id
+ORDER BY event_datetime, event_id
+LIMIT 200;
+----------------------------------------------------------
+-- E.2.10) Top users by number of reconstructed sessions
+----------------------------------------------------------
+SELECT
+CAST(SUBSTRING_INDEX(session_id_generated, '_', 1) AS UNSIGNED) AS user_id_int,
+COUNT(DISTINCT session_id_generated) AS sessions_count
+FROM events
+GROUP BY user_id_int
+ORDER BY sessions_count DESC
+LIMIT 20;
+----------------------------------------------------------
+-- E.2.11) Cleanup temporary table (defensive; temp tables
+-- normally auto-drop at end of session)
+----------------------------------------------------------
+DROP TEMPORARY TABLE IF EXISTS tmp_event_sessions;
+/* End of STEP D & STEP E (session reconstruction) */
+-- SQL version: MySQL 8.0
+/* ============================================================================
+STEP F — SESSION & FUNNEL FOUNDATION
+F.1 Contextual checks: events and reconstructed sessions
+F.2 Per-user first-stage funnel table (user_first_stages)
+F.3 Funnel summary + time-to-step stats
+F.4 Weekly cohort retention table
+============================================================================ */
+----------------------------------------------------------
+-- F.1) Contextual counts for events and sessions
+----------------------------------------------------------
+SELECT
+(SELECT COUNT(*) FROM events) AS total_events,
+(SELECT COUNT(DISTINCT session_id_generated) FROM events) AS total_sessions,
+(SELECT COUNT(*) FROM events) /
+NULLIF((SELECT COUNT(DISTINCT session_id_generated) FROM events), 0) AS avg_events_per_session_check;
+/* ============================================================================
+F.2 — USER-FIRST-STAGES (canonical per-user funnel table)
+Purpose:
+- For each user, record the first timestamp they reached key funnel steps:
+* signup
+* browse_restaurant
+* view_menu
+* add_to_cart
+* start_checkout
+* payment (from events)
+* payment/order (from orders)
+- Non-destructive: users/events/orders remain untouched.
+============================================================================ */
+----------------------------------------------------------
+-- F.2.1) Create user_first_stages if not exists
+----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_first_stages
+(
+user_id INT NOT NULL PRIMARY KEY,
+t_signup DATETIME NULL,
+t_browse DATETIME NULL,
+t_view DATETIME NULL,
+t_addcart DATETIME NULL,
+t_checkout DATETIME NULL,
+t_payment DATETIME NULL, -- event-based payment
+first_order_time_from_orders DATETIME NULL, -- earliest successful order
+t_first_payment_canonical DATETIME NULL, -- COALESCE(t_payment, first_order_time_from_orders)
+INDEX idx_ufs_t_signup (t_signup),
+INDEX idx_ufs_t_first_payment (t_first_payment_canonical)
+) ENGINE = InnoDB;
+----------------------------------------------------------
+-- F.2.2) Populate / refresh user_first_stages
+----------------------------------------------------------
+INSERT INTO user_first_stages (
+user_id,
+t_signup,
+t_browse,
+t_view,
+t_addcart,
+t_checkout,
+t_payment,
+first_order_time_from_orders,
+t_first_payment_canonical
+)
+SELECT
+u.user_id,
+u.signup_datetime AS t_signup,
+-- first browse_restaurant event
+e.t_browse,
+-- first view_menu event
+e.t_view,
+-- first add_to_cart event
+e.t_addcart,
+-- first start_checkout event
+e.t_checkout,
+-- first payment-like event from events (payment_success or order_complete)
+e.t_payment,
+-- earliest successful order time (success = 1)
+o.first_order_time_from_orders,
+-- canonical payment timestamp: prefer event payment, else order time
+COALESCE(e.t_payment, o.first_order_time_from_orders) AS t_first_payment_canonical
+FROM users AS u
+LEFT JOIN (
+-- aggregate events per user to get first timestamp for each event type
+SELECT
+user_id,
+MIN(CASE WHEN event_type = 'browse_restaurant' THEN event_datetime END) AS t_browse,
+MIN(CASE WHEN event_type = 'view_menu' THEN event_datetime END) AS t_view,
+MIN(CASE WHEN event_type = 'add_to_cart' THEN event_datetime END) AS t_addcart,
+MIN(CASE WHEN event_type = 'start_checkout' THEN event_datetime END) AS t_checkout,
+MIN(CASE WHEN event_type IN ('payment_success', 'order_complete') THEN event_datetime END) AS t_payment
+FROM events
+GROUP BY user_id
+) AS e
+ON u.user_id = e.user_id
+LEFT JOIN (
+-- earliest successful order per user
+SELECT
+user_id,
+MIN(order_datetime) AS first_order_time_from_orders
+FROM orders
+WHERE success = 1
+GROUP BY user_id
+) AS o
+ON u.user_id = o.user_id
+ON DUPLICATE KEY UPDATE
+t_signup = VALUES(t_signup),
+t_browse = VALUES(t_browse),
+t_view = VALUES(t_view),
+t_addcart = VALUES(t_addcart),
+t_checkout = VALUES(t_checkout),
+t_payment = VALUES(t_payment),
+first_order_time_from_orders = VALUES(first_order_time_from_orders),
+t_first_payment_canonical = VALUES(t_first_payment_canonical);
+----------------------------------------------------------
+-- F.2.3) Verification for user_first_stages
+----------------------------------------------------------
+-- Row count: should equal number of users
+SELECT 'ufs_row_count' AS check_name,
+COUNT(*) AS value
+FROM user_first_stages;
+-- Stage-population summary: how many users reached each stage
+SELECT
+COUNT(*) AS total_users,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM((t_payment IS NOT NULL) OR (first_order_time_from_orders IS NOT NULL)) AS n_payment_or_order
+FROM user_first_stages;
+-- Sample rows: most recent signups
+SELECT *
+FROM user_first_stages
+ORDER BY t_signup DESC
+LIMIT 10;
+-- Canonical payment present
+SELECT 'ufs_canonical_payment_count' AS check_name,
+COUNT(*) AS value
+FROM user_first_stages
+WHERE t_first_payment_canonical IS NOT NULL;
+-- Users with no events at all (no browse/view/addcart/checkout)
+SELECT user_id
+FROM user_first_stages
+WHERE t_browse IS NULL
+AND t_view IS NULL
+AND t_addcart IS NULL
+AND t_checkout IS NULL
+LIMIT 5;
+-- Quick check: t_signup should rarely/never be NULL
+SELECT 'signup_null_count' AS check_name,
+COUNT(*) AS value
+FROM user_first_stages
+WHERE t_signup IS NULL;
+/* ============================================================================
+F.3 — FUNNEL SUMMARY & TIME-TO-STEP STATISTICS
+Assumes user_first_stages has:
+user_id, t_signup, t_browse, t_view, t_addcart, t_checkout, t_first_payment_canonical
+============================================================================ */
+----------------------------------------------------------
+-- F.3.1) Funnel summary table (single snapshot row)
+----------------------------------------------------------
+DROP TABLE IF EXISTS funnel_summary;
+CREATE TABLE funnel_summary
+(
+snapshot_date DATE NOT NULL PRIMARY KEY,
+total_users INT,
+n_signed_up INT,
+n_browsed INT,
+n_viewed INT,
+n_addcart INT,
+n_checkout INT,
+n_payment INT,
+pct_signup_to_browse DECIMAL(5, 2),
+pct_browse_to_view DECIMAL(5, 2),
+pct_view_to_addcart DECIMAL(5, 2),
+pct_addcart_to_checkout DECIMAL(5, 2),
+pct_checkout_to_payment DECIMAL(5, 2)
+) ENGINE = InnoDB;
+INSERT INTO funnel_summary
+SELECT
+CURRENT_DATE() AS snapshot_date,
+COUNT(*) AS total_users,
+SUM(t_signup IS NOT NULL) AS n_signed_up,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM(t_first_payment_canonical IS NOT NULL) AS n_payment,
+-- percentages (safe division)
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_browse IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
+END AS pct_signup_to_browse,
+CASE
+WHEN SUM(t_browse IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_view IS NOT NULL) / NULLIF(SUM(t_browse IS NOT NULL), 0), 2)
+END AS pct_browse_to_view,
+CASE
+WHEN SUM(t_view IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_addcart IS NOT NULL) / NULLIF(SUM(t_view IS NOT NULL), 0), 2)
+END AS pct_view_to_addcart,
+CASE
+WHEN SUM(t_addcart IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_checkout IS NOT NULL) / NULLIF(SUM(t_addcart IS NOT NULL), 0), 2)
+END AS pct_addcart_to_checkout,
+CASE
+WHEN SUM(t_checkout IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_first_payment_canonical IS NOT NULL) / NULLIF(SUM(t_checkout IS NOT NULL), 0), 2)
+END AS pct_checkout_to_payment
+FROM user_first_stages;
+----------------------------------------------------------
+-- F.3.2) Time-to-step stats table (one row per interval)
+----------------------------------------------------------
+DROP TABLE IF EXISTS time_to_step_stats;
+CREATE TABLE time_to_step_stats
+(
+interval_name VARCHAR(64) NOT NULL PRIMARY KEY,
+n_users INT,
+avg_minutes DECIMAL(10, 2),
+median_minutes DECIMAL(10, 2),
+p25_minutes DECIMAL(10, 2),
+p75_minutes DECIMAL(10, 2)
+) ENGINE = InnoDB;
+----------------------------------------------------------
+-- Helper pattern:
+-- - base set = TIMESTAMPDIFF(MINUTE, start_ts, end_ts)
+-- - AVG over base
+-- - Median / p25 / p75 via window functions
+----------------------------------------------------------
+-- A) signup_to_browse
+INSERT INTO time_to_step_stats
+SELECT
+'signup_to_browse' AS interval_name,
+COUNT(*) AS n_users,
+ROUND(AVG(diff_minutes), 2) AS avg_minutes,
+-- median
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_signup, t_browse) AS diff_minutes
+FROM user_first_stages
+WHERE t_signup IS NOT NULL
+AND t_browse IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2))) AS median_minutes,
+-- p25
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_signup, t_browse) AS diff_minutes
+FROM user_first_stages
+WHERE t_signup IS NOT NULL
+AND t_browse IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.25), CEIL((cnt + 1) * 0.25))) AS p25_minutes,
+-- p75
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_signup, t_browse) AS diff_minutes
+FROM user_first_stages
+WHERE t_signup IS NOT NULL
+AND t_browse IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.75), CEIL((cnt + 1) * 0.75))) AS p75_minutes
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_signup, t_browse) AS diff_minutes
+FROM user_first_stages
+WHERE t_signup IS NOT NULL
+AND t_browse IS NOT NULL
+) AS base;
+-- B) browse_to_view
+INSERT INTO time_to_step_stats
+SELECT
+'browse_to_view',
+COUNT(*) AS n_users,
+ROUND(AVG(diff_minutes), 2),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_browse, t_view) AS diff_minutes
+FROM user_first_stages
+WHERE t_browse IS NOT NULL
+AND t_view IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_browse, t_view) AS diff_minutes
+FROM user_first_stages
+WHERE t_browse IS NOT NULL
+AND t_view IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.25), CEIL((cnt + 1) * 0.25))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_browse, t_view) AS diff_minutes
+FROM user_first_stages
+WHERE t_browse IS NOT NULL
+AND t_view IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.75), CEIL((cnt + 1) * 0.75)))
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_browse, t_view) AS diff_minutes
+FROM user_first_stages
+WHERE t_browse IS NOT NULL
+AND t_view IS NOT NULL
+) AS base;
+-- C) view_to_addcart
+INSERT INTO time_to_step_stats
+SELECT
+'view_to_addcart',
+COUNT(*) AS n_users,
+ROUND(AVG(diff_minutes), 2),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_view, t_addcart) AS diff_minutes
+FROM user_first_stages
+WHERE t_view IS NOT NULL
+AND t_addcart IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_view, t_addcart) AS diff_minutes
+FROM user_first_stages
+WHERE t_view IS NOT NULL
+AND t_addcart IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.25), CEIL((cnt + 1) * 0.25))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_view, t_addcart) AS diff_minutes
+FROM user_first_stages
+WHERE t_view IS NOT NULL
+AND t_addcart IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.75), CEIL((cnt + 1) * 0.75)))
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_view, t_addcart) AS diff_minutes
+FROM user_first_stages
+WHERE t_view IS NOT NULL
+AND t_addcart IS NOT NULL
+) AS base;
+-- D) addcart_to_checkout
+INSERT INTO time_to_step_stats
+SELECT
+'addcart_to_checkout',
+COUNT(*) AS n_users,
+ROUND(AVG(diff_minutes), 2),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_addcart, t_checkout) AS diff_minutes
+FROM user_first_stages
+WHERE t_addcart IS NOT NULL
+AND t_checkout IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_addcart, t_checkout) AS diff_minutes
+FROM user_first_stages
+WHERE t_addcart IS NOT NULL
+AND t_checkout IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.25), CEIL((cnt + 1) * 0.25))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_addcart, t_checkout) AS diff_minutes
+FROM user_first_stages
+WHERE t_addcart IS NOT NULL
+AND t_checkout IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.75), CEIL((cnt + 1) * 0.75)))
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_addcart, t_checkout) AS diff_minutes
+FROM user_first_stages
+WHERE t_addcart IS NOT NULL
+AND t_checkout IS NOT NULL
+) AS base;
+-- E) checkout_to_payment (uses canonical payment time)
+INSERT INTO time_to_step_stats
+SELECT
+'checkout_to_payment',
+COUNT(*) AS n_users,
+ROUND(AVG(diff_minutes), 2),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_checkout, t_first_payment_canonical) AS diff_minutes
+FROM user_first_stages
+WHERE t_checkout IS NOT NULL
+AND t_first_payment_canonical IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_checkout, t_first_payment_canonical) AS diff_minutes
+FROM user_first_stages
+WHERE t_checkout IS NOT NULL
+AND t_first_payment_canonical IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.25), CEIL((cnt + 1) * 0.25))),
+(SELECT ROUND(AVG(diff_minutes), 2)
+FROM (
+SELECT
+diff_minutes,
+ROW_NUMBER() OVER (ORDER BY diff_minutes) AS rn,
+COUNT(*) OVER () AS cnt
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_checkout, t_first_payment_canonical) AS diff_minutes
+FROM user_first_stages
+WHERE t_checkout IS NOT NULL
+AND t_first_payment_canonical IS NOT NULL
+) AS q
+) AS r
+WHERE rn IN (FLOOR((cnt + 1) * 0.75), CEIL((cnt + 1) * 0.75)))
+FROM (
+SELECT TIMESTAMPDIFF(MINUTE, t_checkout, t_first_payment_canonical) AS diff_minutes
+FROM user_first_stages
+WHERE t_checkout IS NOT NULL
+AND t_first_payment_canonical IS NOT NULL
+) AS base;
+----------------------------------------------------------
+-- F.3.3) Funnel & time-to-step verification (read-only)
+----------------------------------------------------------
+SELECT * FROM funnel_summary;
+SELECT * FROM time_to_step_stats ORDER BY interval_name;
+-- Cross-check: funnel n_browsed vs explicit count
+SELECT
+(SELECT n_browsed FROM funnel_summary) AS funnel_n_browsed,
+(SELECT COUNT(*) FROM user_first_stages WHERE t_browse IS NOT NULL) AS computed_n_browsed;
+/* ============================================================================
+F.4 — WEEKLY COHORT RETENTION (cohort_weekly_retention)
+Assumptions:
+- users: signup_datetime (preferred) or signup_date
+- events: event_datetime (DATETIME) for activity
+Metric:
+- Weekly cohorts (by signup week, Monday as start)
+- Active users per cohort in weeks 1..8
+- Retention % per week = active_users_week_N / cohort_size * 100
+============================================================================ */
+----------------------------------------------------------
+-- F.4.1) Drop and recreate cohort_weekly_retention
+----------------------------------------------------------
+DROP TABLE IF EXISTS cohort_weekly_retention;
+CREATE TABLE cohort_weekly_retention
+(
+cohort_week VARCHAR(16) NOT NULL PRIMARY KEY, -- e.g. '2023-W25'
+cohort_start_date DATE NOT NULL, -- Monday start date
+cohort_size INT NOT NULL,
+week_0_active INT,
+week_1_active INT,
+week_2_active INT,
+week_3_active INT,
+week_4_active INT,
+week_5_active INT,
+week_6_active INT,
+week_7_active INT,
+week_8_active INT,
+week_1_retention_pct DECIMAL(6, 2),
+week_2_retention_pct DECIMAL(6, 2),
+week_3_retention_pct DECIMAL(6, 2),
+week_4_retention_pct DECIMAL(6, 2),
+week_5_retention_pct DECIMAL(6, 2),
+week_6_retention_pct DECIMAL(6, 2),
+week_7_retention_pct DECIMAL(6, 2),
+week_8_retention_pct DECIMAL(6, 2)
+) ENGINE = InnoDB;
+----------------------------------------------------------
+-- F.4.2) Insert weekly cohort retention rows
+----------------------------------------------------------
+INSERT INTO cohort_weekly_retention (
+cohort_week,
+cohort_start_date,
+cohort_size,
+week_0_active,
+week_1_active,
+week_2_active,
+week_3_active,
+week_4_active,
+week_5_active,
+week_6_active,
+week_7_active,
+week_8_active,
+week_1_retention_pct,
+week_2_retention_pct,
+week_3_retention_pct,
+week_4_retention_pct,
+week_5_retention_pct,
+week_6_retention_pct,
+week_7_retention_pct,
+week_8_retention_pct
+)
+SELECT
+uc.cohort_week,
+uc.cohort_start_date,
+uc.cohort_size,
+uc.cohort_size AS week_0_active,
+COALESCE(MAX(CASE WHEN a.week_index = 1 THEN a.users_active END), 0) AS week_1_active,
+COALESCE(MAX(CASE WHEN a.week_index = 2 THEN a.users_active END), 0) AS week_2_active,
+COALESCE(MAX(CASE WHEN a.week_index = 3 THEN a.users_active END), 0) AS week_3_active,
+COALESCE(MAX(CASE WHEN a.week_index = 4 THEN a.users_active END), 0) AS week_4_active,
+COALESCE(MAX(CASE WHEN a.week_index = 5 THEN a.users_active END), 0) AS week_5_active,
+COALESCE(MAX(CASE WHEN a.week_index = 6 THEN a.users_active END), 0) AS week_6_active,
+COALESCE(MAX(CASE WHEN a.week_index = 7 THEN a.users_active END), 0) AS week_7_active,
+COALESCE(MAX(CASE WHEN a.week_index = 8 THEN a.users_active END), 0) AS week_8_active,
+-- Retention percentages
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 1 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_1_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 2 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_2_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 3 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_3_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 4 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_4_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 5 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_5_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 6 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_6_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 7 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_7_retention_pct,
+CASE
+WHEN uc.cohort_size = 0 THEN NULL
+ELSE ROUND(100.0 * COALESCE(MAX(CASE WHEN a.week_index = 8 THEN a.users_active END), 0) / uc.cohort_size, 2)
+END AS week_8_retention_pct
+FROM
+-- User cohorts: assign each user a cohort_start_date (Monday) and cohort_week string
+(
+SELECT
+cohort_week,
+cohort_start_date,
+COUNT(*) AS cohort_size
+FROM (
+SELECT
+u.user_id,
+DATE(COALESCE(u.signup_datetime, u.signup_date)) AS signup_date_only,
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+) AS cohort_start_date,
+CONCAT(
+YEAR(
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+)
+),
+'-W',
+LPAD(
+WEEK(
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+),
+3
+),
+2,
+'0'
+)
+) AS cohort_week
+FROM users AS u
+) AS x
+GROUP BY cohort_week, cohort_start_date
+) AS uc
+LEFT JOIN
+(
+-- Activity per cohort and week_index (1..8), distinct users active
+SELECT
+ac.cohort_week,
+ac.cohort_start_date,
+ac.week_index,
+COUNT(DISTINCT ac.user_id) AS users_active
+FROM (
+SELECT
+u.user_id,
+-- Cohort info from signup
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+) AS cohort_start_date,
+CONCAT(
+YEAR(
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+)
+),
+'-W',
+LPAD(
+WEEK(
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+),
+3
+),
+2,
+'0'
+)
+) AS cohort_week,
+e.user_id AS event_user_id,
+DATE(e.event_datetime) AS event_date,
+FLOOR(
+DATEDIFF(DATE(e.event_datetime),
+DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+)
+) / 7
+) AS week_index
+FROM users AS u
+JOIN events AS e
+ON e.user_id = u.user_id
+WHERE DATE(e.event_datetime) >= DATE_SUB(
+DATE(COALESCE(u.signup_datetime, u.signup_date)),
+INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+)
+) AS ac
+WHERE ac.week_index BETWEEN 1 AND 8
+GROUP BY ac.cohort_week, ac.cohort_start_date, ac.week_index
+) AS a
+ON a.cohort_week = uc.cohort_week
+AND a.cohort_start_date = uc.cohort_start_date
+GROUP BY
+uc.cohort_week,
+uc.cohort_start_date,
+uc.cohort_size;
+----------------------------------------------------------
+-- F.4.3) Cohort retention verification queries
+----------------------------------------------------------
+-- How many cohort rows created
+SELECT 'cohort_rows' AS check_name,
+COUNT(*) AS value
+FROM cohort_weekly_retention;
+-- Inspect first 50 rows (most recent cohorts first)
+SELECT *
+FROM cohort_weekly_retention
+ORDER BY cohort_start_date DESC
+LIMIT 50;
+-- Validate cohort_size vs direct user count for top 5 cohorts
+SELECT
+c.cohort_week,
+c.cohort_start_date,
+c.cohort_size,
+(
+SELECT COUNT(*)
+FROM users u
+WHERE DATE(COALESCE(u.signup_datetime, u.signup_date))
+BETWEEN c.cohort_start_date
+AND DATE_ADD(c.cohort_start_date, INTERVAL 6 DAY)
+) AS verify_cohort_size
+FROM cohort_weekly_retention AS c
+ORDER BY c.cohort_start_date DESC
+LIMIT 5;
+-- Example template to manually validate week_1_active for a specific cohort:
+-- Replace '2023-06-05' with one of your cohort_start_date values.
+-- SELECT COUNT(DISTINCT e.user_id)
+-- FROM events e
+-- JOIN users u ON u.user_id = e.user_id
+-- WHERE DATE(COALESCE(u.signup_datetime, u.signup_date))
+-- BETWEEN '2023-06-05' AND DATE_ADD('2023-06-05', INTERVAL 6 DAY)
+-- AND FLOOR(
+-- DATEDIFF(
+-- DATE(e.event_datetime),
+-- DATE_SUB(
+-- DATE(COALESCE(u.signup_datetime, u.signup_date)),
+-- INTERVAL WEEKDAY(DATE(COALESCE(u.signup_datetime, u.signup_date))) DAY
+-- )
+-- ) / 7
+-- ) = 1;
+----------------------------------------------------------
+-- F.5) Connection character set / collation (optional safety)
+----------------------------------------------------------
+SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci';
+SET SESSION collation_connection = 'utf8mb4_general_ci';
+-- SQL version: MySQL 8.0
+/******************************************************************************
+SEGMENTATION PERFORMANCE TABLES
+Purpose:
+- Build per-segment funnel metrics, retention (weeks 1..8),
+and revenue summaries.
+- Segments: device, acquisition_channel, gender, city, age_group.
+- Source tables: users, user_first_stages, events, orders.
+Notes:
+- Creates derived summary tables only; source data remains unchanged.
+- Age groups: 18-24, 25-34, 35-44, 45+
+******************************************************************************/
+-- =========================
+-- 0) Cleanup derived tables (idempotent)
+-- =========================
+DROP TABLE IF EXISTS segment_funnel_summary;
+DROP TABLE IF EXISTS segment_retention_summary;
+DROP TABLE IF EXISTS segment_revenue_summary;
+DROP TABLE IF EXISTS user_segments;
+-- =========================
+-- 1) user_segments helper table
+-- One row per user with canonical stage timestamps and segment attributes.
+-- =========================
+CREATE TABLE user_segments AS
+SELECT
+u.user_id,
+-- signup datetime: prefer user_first_stages.t_signup, then users.signup_datetime, then users.signup_date
+COALESCE(ufs.t_signup, u.signup_datetime, u.signup_date) AS signup_datetime,
+-- canonical payment time
+COALESCE(ufs.t_first_payment_canonical, u.first_order_datetime) AS t_first_payment_canonical,
+-- funnel stage timestamps
+ufs.t_browse,
+ufs.t_view,
+ufs.t_addcart,
+ufs.t_checkout,
+ufs.t_payment,
+-- normalized segment attributes
+COALESCE(u.device, 'UNKNOWN') AS device,
+COALESCE(u.acquisition_channel, 'UNKNOWN') AS acquisition_channel,
+COALESCE(u.gender, 'unknown') AS gender,
+COALESCE(u.city, 'unknown') AS city,
+-- age_group buckets
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+WHEN u.age IS NULL THEN 'unknown'
+ELSE 'unknown'
+END AS age_group
+FROM users AS u
+LEFT JOIN user_first_stages AS ufs
+ON u.user_id = ufs.user_id;
+-- Indexes for downstream aggregations
+ALTER TABLE user_segments ADD INDEX idx_us_user (user_id);
+ALTER TABLE user_segments ADD INDEX idx_us_device (device);
+ALTER TABLE user_segments ADD INDEX idx_us_acq (acquisition_channel);
+ALTER TABLE user_segments ADD INDEX idx_us_city (city);
+ALTER TABLE user_segments ADD INDEX idx_us_age (age_group);
+ALTER TABLE user_segments ADD INDEX idx_us_gender (gender);
+-- =========================
+-- 2) segment_funnel_summary
+-- Per segment funnel counts and conversion rates.
+-- =========================
+CREATE TABLE segment_funnel_summary
+(
+segment_type VARCHAR(32) NOT NULL,
+segment_value VARCHAR(128) NOT NULL,
+n_users INT NOT NULL,
+n_browsed INT,
+n_viewed INT,
+n_addcart INT,
+n_checkout INT,
+n_payment INT,
+pct_signup_to_browse DECIMAL(6, 2),
+pct_browse_to_view DECIMAL(6, 2),
+pct_view_to_addcart DECIMAL(6, 2),
+pct_addcart_to_checkout DECIMAL(6, 2),
+pct_checkout_to_payment DECIMAL(6, 2),
+PRIMARY KEY (segment_type, segment_value)
+) ENGINE = InnoDB;
+INSERT INTO segment_funnel_summary
+SELECT *
+FROM (
+/* --------------------
+DEVICE
+-------------------- */
+SELECT
+'device' AS segment_type,
+device AS segment_value,
+COUNT(*) AS n_users,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM(t_first_payment_canonical IS NOT NULL) AS n_payment,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_browse IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
+END AS pct_signup_to_browse,
+CASE
+WHEN SUM(t_browse IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_view IS NOT NULL) / NULLIF(SUM(t_browse IS NOT NULL), 0), 2)
+END AS pct_browse_to_view,
+CASE
+WHEN SUM(t_view IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_addcart IS NOT NULL) / NULLIF(SUM(t_view IS NOT NULL), 0), 2)
+END AS pct_view_to_addcart,
+CASE
+WHEN SUM(t_addcart IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_checkout IS NOT NULL) / NULLIF(SUM(t_addcart IS NOT NULL), 0), 2)
+END AS pct_addcart_to_checkout,
+CASE
+WHEN SUM(t_checkout IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(
+100.0 * SUM(t_first_payment_canonical IS NOT NULL)
+/ NULLIF(SUM(t_checkout IS NOT NULL), 0),
+2
+)
+END AS pct_checkout_to_payment
+FROM user_segments
+GROUP BY device
+UNION ALL
+/* --------------------
+ACQUISITION CHANNEL
+-------------------- */
+SELECT
+'acquisition_channel' AS segment_type,
+acquisition_channel AS segment_value,
+COUNT(*) AS n_users,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM(t_first_payment_canonical IS NOT NULL) AS n_payment,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_browse IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
+END,
+CASE
+WHEN SUM(t_browse IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_view IS NOT NULL) / NULLIF(SUM(t_browse IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_view IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_addcart IS NOT NULL) / NULLIF(SUM(t_view IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_addcart IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_checkout IS NOT NULL) / NULLIF(SUM(t_addcart IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_checkout IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(
+100.0 * SUM(t_first_payment_canonical IS NOT NULL)
+/ NULLIF(SUM(t_checkout IS NOT NULL), 0),
+2
+)
+END
+FROM user_segments
+GROUP BY acquisition_channel
+UNION ALL
+/* --------------------
+GENDER
+-------------------- */
+SELECT
+'gender' AS segment_type,
+gender AS segment_value,
+COUNT(*) AS n_users,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM(t_first_payment_canonical IS NOT NULL) AS n_payment,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_browse IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
+END,
+CASE
+WHEN SUM(t_browse IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_view IS NOT NULL) / NULLIF(SUM(t_browse IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_view IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_addcart IS NOT NULL) / NULLIF(SUM(t_view IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_addcart IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_checkout IS NOT NULL) / NULLIF(SUM(t_addcart IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_checkout IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(
+100.0 * SUM(t_first_payment_canonical IS NOT NULL)
+/ NULLIF(SUM(t_checkout IS NOT NULL), 0),
+2
+)
+END
+FROM user_segments
+GROUP BY gender
+UNION ALL
+/* --------------------
+CITY
+-------------------- */
+SELECT
+'city' AS segment_type,
+city AS segment_value,
+COUNT(*) AS n_users,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM(t_first_payment_canonical IS NOT NULL) AS n_payment,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_browse IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
+END,
+CASE
+WHEN SUM(t_browse IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_view IS NOT NULL) / NULLIF(SUM(t_browse IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_view IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_addcart IS NOT NULL) / NULLIF(SUM(t_view IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_addcart IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_checkout IS NOT NULL) / NULLIF(SUM(t_addcart IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_checkout IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(
+100.0 * SUM(t_first_payment_canonical IS NOT NULL)
+/ NULLIF(SUM(t_checkout IS NOT NULL), 0),
+2
+)
+END
+FROM user_segments
+GROUP BY city
+UNION ALL
+/* --------------------
+AGE GROUP
+-------------------- */
+SELECT
+'age_group' AS segment_type,
+age_group AS segment_value,
+COUNT(*) AS n_users,
+SUM(t_browse IS NOT NULL) AS n_browsed,
+SUM(t_view IS NOT NULL) AS n_viewed,
+SUM(t_addcart IS NOT NULL) AS n_addcart,
+SUM(t_checkout IS NOT NULL) AS n_checkout,
+SUM(t_first_payment_canonical IS NOT NULL) AS n_payment,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_browse IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
+END,
+CASE
+WHEN SUM(t_browse IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_view IS NOT NULL) / NULLIF(SUM(t_browse IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_view IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_addcart IS NOT NULL) / NULLIF(SUM(t_view IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_addcart IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(100.0 * SUM(t_checkout IS NOT NULL) / NULLIF(SUM(t_addcart IS NOT NULL), 0), 2)
+END,
+CASE
+WHEN SUM(t_checkout IS NOT NULL) = 0 THEN NULL
+ELSE ROUND(
+100.0 * SUM(t_first_payment_canonical IS NOT NULL)
+/ NULLIF(SUM(t_checkout IS NOT NULL), 0),
+2
+)
+END
+FROM user_segments
+GROUP BY age_group
+) AS t_all;
+-- Indexes for fast lookups
+ALTER TABLE segment_funnel_summary ADD INDEX idx_sfs_type (segment_type);
+ALTER TABLE segment_funnel_summary ADD INDEX idx_sfs_value (segment_value);
+-- =========================
+-- 3) segment_retention_summary
+-- Per-segment weekly retention (weeks 1..8).
+-- =========================
+CREATE TABLE segment_retention_summary
+(
+segment_type VARCHAR(32) NOT NULL,
+segment_value VARCHAR(128) NOT NULL,
+n_users INT NOT NULL,
+week_1_active INT,
+week_1_retention_pct DECIMAL(6, 2),
+week_2_active INT,
+week_2_retention_pct DECIMAL(6, 2),
+week_3_active INT,
+week_3_retention_pct DECIMAL(6, 2),
+week_4_active INT,
+week_4_retention_pct DECIMAL(6, 2),
+week_5_active INT,
+week_5_retention_pct DECIMAL(6, 2),
+week_6_active INT,
+week_6_retention_pct DECIMAL(6, 2),
+week_7_active INT,
+week_7_retention_pct DECIMAL(6, 2),
+week_8_active INT,
+week_8_retention_pct DECIMAL(6, 2),
+PRIMARY KEY (segment_type, segment_value)
+) ENGINE = InnoDB;
+-- 3.A) Build per (segment_type, segment_value, week_index) counts
+DROP TEMPORARY TABLE IF EXISTS tmp_segment_week_users;
+CREATE TEMPORARY TABLE tmp_segment_week_users AS
+SELECT
+'device' AS segment_type,
+us.device AS segment_value,
+FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) AS week_index,
+COUNT(DISTINCT e.user_id) AS users_active
+FROM user_segments AS us
+JOIN events AS e
+ON e.user_id = us.user_id
+WHERE us.signup_datetime IS NOT NULL
+AND FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) BETWEEN 1 AND 8
+GROUP BY us.device, week_index
+UNION ALL
+SELECT
+'acquisition_channel' AS segment_type,
+us.acquisition_channel AS segment_value,
+FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) AS week_index,
+COUNT(DISTINCT e.user_id) AS users_active
+FROM user_segments AS us
+JOIN events AS e
+ON e.user_id = us.user_id
+WHERE us.signup_datetime IS NOT NULL
+AND FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) BETWEEN 1 AND 8
+GROUP BY us.acquisition_channel, week_index
+UNION ALL
+SELECT
+'gender' AS segment_type,
+us.gender AS segment_value,
+FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) AS week_index,
+COUNT(DISTINCT e.user_id) AS users_active
+FROM user_segments AS us
+JOIN events AS e
+ON e.user_id = us.user_id
+WHERE us.signup_datetime IS NOT NULL
+AND FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) BETWEEN 1 AND 8
+GROUP BY us.gender, week_index
+UNION ALL
+SELECT
+'city' AS segment_type,
+us.city AS segment_value,
+FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) AS week_index,
+COUNT(DISTINCT e.user_id) AS users_active
+FROM user_segments AS us
+JOIN events AS e
+ON e.user_id = us.user_id
+WHERE us.signup_datetime IS NOT NULL
+AND FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) BETWEEN 1 AND 8
+GROUP BY us.city, week_index
+UNION ALL
+SELECT
+'age_group' AS segment_type,
+us.age_group AS segment_value,
+FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) AS week_index,
+COUNT(DISTINCT e.user_id) AS users_active
+FROM user_segments AS us
+JOIN events AS e
+ON e.user_id = us.user_id
+WHERE us.signup_datetime IS NOT NULL
+AND FLOOR(
+DATEDIFF(
+DATE(e.event_datetime),
+DATE_SUB(DATE(us.signup_datetime),
+INTERVAL WEEKDAY(DATE(us.signup_datetime)) DAY)
+) / 7
+) BETWEEN 1 AND 8
+GROUP BY us.age_group, week_index;
+ALTER TABLE tmp_segment_week_users
+ADD INDEX idx_tswu (segment_type, segment_value, week_index);
+-- 3.B) Pivot into segment_retention_summary
+INSERT INTO segment_retention_summary
+SELECT
+s.segment_type,
+s.segment_value,
+s.n_users,
+COALESCE(MAX(CASE WHEN t.week_index = 1 THEN t.users_active END), 0) AS week_1_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 1 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_1_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 2 THEN t.users_active END), 0) AS week_2_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 2 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_2_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 3 THEN t.users_active END), 0) AS week_3_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 3 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_3_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 4 THEN t.users_active END), 0) AS week_4_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 4 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_4_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 5 THEN t.users_active END), 0) AS week_5_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 5 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_5_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 6 THEN t.users_active END), 0) AS week_6_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 6 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_6_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 7 THEN t.users_active END), 0) AS week_7_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 7 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_7_retention_pct,
+COALESCE(MAX(CASE WHEN t.week_index = 8 THEN t.users_active END), 0) AS week_8_active,
+CASE
+WHEN s.n_users = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(MAX(CASE WHEN t.week_index = 8 THEN t.users_active END), 0) / s.n_users,
+2
+)
+END AS week_8_retention_pct
+FROM (
+-- base segment sizes
+SELECT 'device' AS segment_type, device AS segment_value, COUNT(*) AS n_users
+FROM user_segments
+GROUP BY device
+UNION ALL
+SELECT 'acquisition_channel', acquisition_channel, COUNT(*)
+FROM user_segments
+GROUP BY acquisition_channel
+UNION ALL
+SELECT 'gender', gender, COUNT(*)
+FROM user_segments
+GROUP BY gender
+UNION ALL
+SELECT 'city', city, COUNT(*)
+FROM user_segments
+GROUP BY city
+UNION ALL
+SELECT 'age_group', age_group, COUNT(*)
+FROM user_segments
+GROUP BY age_group
+) AS s
+LEFT JOIN tmp_segment_week_users AS t
+ON t.segment_type = s.segment_type
+AND t.segment_value = s.segment_value
+GROUP BY s.segment_type, s.segment_value, s.n_users;
+ALTER TABLE segment_retention_summary ADD INDEX idx_srs_type (segment_type);
+ALTER TABLE segment_retention_summary ADD INDEX idx_srs_value (segment_value);
+-- =========================
+-- 4) segment_revenue_summary
+-- Per segment: buyers, orders, revenue, and conversion to buyers.
+-- =========================
+CREATE TABLE segment_revenue_summary
+(
+segment_type VARCHAR(32) NOT NULL,
+segment_value VARCHAR(128) NOT NULL,
+n_buyers INT,
+total_orders INT,
+total_revenue DECIMAL(18, 2),
+avg_order_value DECIMAL(12, 2),
+avg_orders_per_user DECIMAL(10, 2),
+buyer_to_user_pct DECIMAL(6, 2),
+PRIMARY KEY (segment_type, segment_value)
+) ENGINE = InnoDB;
+-- Per-user order aggregates
+DROP TEMPORARY TABLE IF EXISTS tmp_user_orders;
+CREATE TEMPORARY TABLE tmp_user_orders AS
+SELECT
+o.user_id,
+COUNT(*) AS n_orders,
+SUM(o.order_value) AS total_revenue,
+AVG(o.order_value) AS avg_order_value
+FROM orders AS o
+WHERE COALESCE(o.success, 0) IN (1, '1')
+GROUP BY o.user_id;
+ALTER TABLE tmp_user_orders ADD INDEX idx_tuo_user (user_id);
+-- Aggregate revenue by segment
+INSERT INTO segment_revenue_summary
+SELECT
+seg.segment_type,
+seg.segment_value,
+COALESCE(SUM(CASE WHEN uo.n_orders IS NOT NULL THEN 1 ELSE 0 END), 0) AS n_buyers,
+COALESCE(SUM(CASE WHEN uo.n_orders IS NOT NULL THEN uo.n_orders ELSE 0 END), 0) AS total_orders,
+COALESCE(ROUND(SUM(COALESCE(uo.total_revenue, 0)), 2), 0.00) AS total_revenue,
+CASE
+WHEN SUM(CASE WHEN uo.n_orders IS NOT NULL THEN uo.n_orders ELSE 0 END) = 0
+THEN NULL
+ELSE ROUND(
+SUM(COALESCE(uo.total_revenue, 0))
+/ SUM(CASE WHEN uo.n_orders IS NOT NULL THEN uo.n_orders ELSE 0 END),
+2
+)
+END AS avg_order_value,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(SUM(COALESCE(uo.n_orders, 0)) / NULLIF(COUNT(*), 0), 2)
+END AS avg_orders_per_user,
+CASE
+WHEN COUNT(*) = 0 THEN NULL
+ELSE ROUND(
+100.0 * SUM(CASE WHEN uo.n_orders IS NOT NULL THEN 1 ELSE 0 END)
+/ NULLIF(COUNT(*), 0),
+2
+)
+END AS buyer_to_user_pct
+FROM (
+-- segment rows: each user repeated for each of its segment dimensions
+SELECT 'device' AS segment_type, device AS segment_value, user_id
+FROM user_segments
+UNION ALL
+SELECT 'acquisition_channel', acquisition_channel, user_id
+FROM user_segments
+UNION ALL
+SELECT 'gender', gender, user_id
+FROM user_segments
+UNION ALL
+SELECT 'city', city, user_id
+FROM user_segments
+UNION ALL
+SELECT 'age_group', age_group, user_id
+FROM user_segments
+) AS seg
+LEFT JOIN tmp_user_orders AS uo
+ON uo.user_id = seg.user_id
+GROUP BY seg.segment_type, seg.segment_value;
+ALTER TABLE segment_revenue_summary ADD INDEX idx_srsrev_type (segment_type);
+ALTER TABLE segment_revenue_summary ADD INDEX idx_srsrev_value (segment_value);
+-- SQL version: MySQL 8.0
+/* ============================================================================
+STEP G — SEGMENTATION VERIFICATION (READ-ONLY CHECKS)
+Purpose:
+- Sanity-check the segment summary tables.
+- Validate counts and revenue consistency.
+============================================================================ */
+-- 5.1 Row counts for created segment tables
+SELECT 'segment_funnel_summary_rows' AS check_name,
+COUNT(*) AS value
+FROM segment_funnel_summary;
+SELECT 'segment_retention_summary_rows' AS check_name,
+COUNT(*) AS value
+FROM segment_retention_summary;
+SELECT 'segment_revenue_summary_rows' AS check_name,
+COUNT(*) AS value
+FROM segment_revenue_summary;
+-- 5.2 Device totals vs total users (should match user_segments count)
+SELECT
+SUM(n_users) AS sum_device_users,
+(SELECT COUNT(*) FROM user_segments) AS total_users
+FROM segment_funnel_summary
+WHERE segment_type = 'device';
+-- 5.3 Top device funnel rows
+SELECT *
+FROM segment_funnel_summary
+WHERE segment_type = 'device'
+ORDER BY n_users DESC
+LIMIT 10;
+-- 5.4 Top acquisition channels by conversion to payment
+SELECT *
+FROM segment_funnel_summary
+WHERE segment_type = 'acquisition_channel'
+ORDER BY pct_checkout_to_payment DESC
+LIMIT 20;
+-- 5.5 Spot-check retention for device segments
+SELECT *
+FROM segment_retention_summary
+WHERE segment_type = 'device'
+ORDER BY week_1_retention_pct DESC;
+-- 5.6 Spot-check revenue for top segments
+SELECT *
+FROM segment_revenue_summary
+ORDER BY total_revenue DESC
+LIMIT 20;
+-- 5.7 Revenue cross-check: raw successful orders vs segment summary totals
+SELECT
+'total_revenue_check' AS check_name,
+ROUND(SUM(order_value), 2) AS orders_total_revenue,
+(SELECT ROUND(SUM(total_revenue), 2) FROM segment_revenue_summary) AS revenue_from_summary
+FROM orders
+WHERE COALESCE(success, 0) IN (1, '1');
+/* ============================================================================
+STEP A — DAILY ACTIVITY METRICS (daily_activity_metrics)
+Purpose:
+- Create a per-day summary table combining:
+* signups
+* engagement (events/sessions)
+* orders & revenue
+* key conversion % and churn_7d_rate
+============================================================================ */
+-- Drop derived table if re-running
+DROP TABLE IF EXISTS daily_activity_metrics;
+CREATE TABLE daily_activity_metrics AS
+WITH
+-- A.1) All distinct dates present in events, orders, or signup dates
+all_dates AS (
+SELECT DISTINCT DATE(event_datetime) AS dt
+FROM events
+WHERE event_datetime IS NOT NULL
+UNION
+SELECT DISTINCT DATE(order_datetime) AS dt
+FROM orders
+WHERE order_datetime IS NOT NULL
+UNION
+SELECT DISTINCT DATE(COALESCE(signup_datetime, signup_date)) AS dt
+FROM users
+WHERE COALESCE(signup_datetime, signup_date) IS NOT NULL
+),
+-- A.2) Event-level aggregates per date
+events_agg AS (
+SELECT
+DATE(e.event_datetime) AS dt,
+COUNT(*) AS total_events,
+COUNT(DISTINCT e.user_id) AS dau,
+COUNT(DISTINCT e.session_id_generated) AS sessions,
+-- users who performed a "browse" style action
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%browse%' THEN e.user_id
+END) AS users_browsed,
+-- users who performed a "view menu" style action
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%view%' OR LOWER(e.event_type) LIKE '%menu%'
+THEN e.user_id
+END) AS users_viewed,
+-- users who fired a payment-like event
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+THEN e.user_id
+END) AS users_payment_event
+FROM events AS e
+WHERE e.event_datetime IS NOT NULL
+GROUP BY DATE(e.event_datetime)
+),
+-- A.3) Order-level aggregates per date (successful orders only)
+orders_agg AS (
+SELECT
+DATE(o.order_datetime) AS dt,
+COUNT(*) AS total_orders,
+SUM(o.order_value) AS revenue,
+AVG(o.order_value) AS avg_order_value,
+COUNT(DISTINCT o.user_id) AS buyers
+FROM orders AS o
+WHERE o.order_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+GROUP BY DATE(o.order_datetime)
+),
+-- A.4) Checkout users per date: users whose first checkout timestamp falls on this date
+checkout_agg AS (
+SELECT
+DATE(t_checkout) AS dt,
+COUNT(DISTINCT user_id) AS checkout_users
+FROM user_first_stages
+WHERE t_checkout IS NOT NULL
+GROUP BY DATE(t_checkout)
+),
+-- A.5) Overlap of payment-event users and successful order buyers on same date
+common_payment_order AS (
+SELECT
+DATE(e.event_datetime) AS dt,
+COUNT(DISTINCT e.user_id) AS common_users
+FROM events AS e
+JOIN orders AS o
+ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+WHERE e.event_datetime IS NOT NULL
+AND o.order_datetime IS NOT NULL
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+AND COALESCE(o.success, 0) IN (1, '1')
+GROUP BY DATE(e.event_datetime)
+)
+SELECT
+d.dt AS `date`,
+-- New users who signed up on this date
+COALESCE((
+SELECT COUNT(*)
+FROM users AS u
+WHERE DATE(COALESCE(u.signup_datetime, u.signup_date)) = d.dt
+), 0) AS new_users,
+-- Engagement from events_agg
+COALESCE(ea.dau, 0) AS dau,
+COALESCE(ea.total_events, 0) AS total_events,
+COALESCE(ea.sessions, 0) AS sessions,
+-- Orders & revenue from orders_agg
+COALESCE(oa.total_orders, 0) AS total_orders,
+COALESCE(oa.revenue, 0.0) AS revenue,
+CASE
+WHEN COALESCE(oa.total_orders, 0) = 0 THEN NULL
+ELSE ROUND(oa.revenue / NULLIF(oa.total_orders, 0), 2)
+END AS avg_order_value,
+/* payment_conversion_pct:
+Numerator:
+distinct users who either:
+- fired a payment-like event that day, OR
+- placed a successful order that day,
+minus overlap users who did both (from common_payment_order).
+Denominator:
+users whose first checkout (t_checkout) fell on that date.
+*/
+CASE
+WHEN COALESCE(ca.checkout_users, 0) = 0 THEN NULL
+ELSE ROUND(
+100.0 * (
+COALESCE(ea.users_payment_event, 0)
++ COALESCE(oa.buyers, 0)
+- COALESCE(cpo.common_users, 0)
+) / NULLIF(ca.checkout_users, 0),
+2
+)
+END AS payment_conversion_pct,
+/* browse_conversion_pct:
+users_viewed / users_browsed (from events_agg)
+*/
+CASE
+WHEN COALESCE(ea.users_browsed, 0) = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(ea.users_viewed, 0)
+/ NULLIF(ea.users_browsed, 0),
+2
+)
+END AS browse_conversion_pct,
+/* churn_7d_rate:
+For users who signed up on date d.dt:
+churn_7d_rate = % of those NOT active on date d.dt + 7 days.
+If no signups that day → NULL.
+*/
+CASE
+WHEN (
+SELECT COUNT(*)
+FROM users AS u
+WHERE DATE(COALESCE(u.signup_datetime, u.signup_date)) = d.dt
+) = 0
+THEN NULL
+ELSE ROUND(
+100.0 * (
+(
+SELECT COUNT(*)
+FROM users AS u
+WHERE DATE(COALESCE(u.signup_datetime, u.signup_date)) = d.dt
+)
+-
+(
+SELECT COUNT(DISTINCT u2.user_id)
+FROM users AS u2
+JOIN events AS e2
+ON e2.user_id = u2.user_id
+WHERE DATE(COALESCE(u2.signup_datetime, u2.signup_date)) = d.dt
+AND DATE(e2.event_datetime) = DATE_ADD(d.dt, INTERVAL 7 DAY)
+)
+) / NULLIF((
+SELECT COUNT(*)
+FROM users AS u
+WHERE DATE(COALESCE(u.signup_datetime, u.signup_date)) = d.dt
+), 0),
+2
+)
+END AS churn_7d_rate,
+-- Free-text annotation field (kept NULL by default)
+NULL AS notes
+FROM all_dates AS d
+LEFT JOIN events_agg AS ea ON ea.dt = d.dt
+LEFT JOIN orders_agg AS oa ON oa.dt = d.dt
+LEFT JOIN checkout_agg AS ca ON ca.dt = d.dt
+LEFT JOIN common_payment_order AS cpo ON cpo.dt = d.dt
+ORDER BY d.dt;
+-- Indexes to support downstream analysis
+ALTER TABLE daily_activity_metrics
+ADD INDEX idx_dam_date (date),
+ADD INDEX idx_dam_dau (dau);
+----------------------------------------------------------
+-- A.2) Daily activity verification queries (read-only)
+----------------------------------------------------------
+-- Total rows and date coverage
+SELECT COUNT(*) AS daily_rows,
+MIN(date) AS first_date,
+MAX(date) AS last_date
+FROM daily_activity_metrics;
+-- Last 10 days snapshot
+SELECT
+date,
+dau,
+total_events,
+sessions,
+total_orders,
+revenue,
+avg_order_value,
+payment_conversion_pct,
+browse_conversion_pct,
+churn_7d_rate
+FROM daily_activity_metrics
+ORDER BY date DESC
+LIMIT 10;
+-- Example deep-dive checks for a specific date (replace with your date if needed)
+-- Check 2: DAU from events
+SELECT COUNT(DISTINCT user_id) AS dau_check
+FROM events
+WHERE DATE(event_datetime) = '2023-06-01';
+-- Check 3: orders & revenue from orders
+SELECT COUNT(*) AS orders_check,
+SUM(order_value) AS revenue_check
+FROM orders
+WHERE COALESCE(success, 0) IN (1, '1')
+AND DATE(order_datetime) = '2023-06-01';
+-- Check 4: checkout users on that date
+SELECT COUNT(DISTINCT user_id) AS checkout_users_check
+FROM user_first_stages
+WHERE DATE(t_checkout) = '2023-06-01';
+-- Payment-like event users that day
+SELECT COUNT(DISTINCT user_id) AS payment_event_users_check
+FROM events
+WHERE DATE(event_datetime) = '2023-06-01'
+AND (
+LOWER(event_type) LIKE '%pay%'
+OR LOWER(event_type) LIKE '%paid%'
+OR LOWER(event_type) LIKE '%payment%'
+OR LOWER(event_type) LIKE '%order_complete%'
+OR LOWER(event_type) LIKE '%charge%'
+);
+-- Buyers (successful orders) that day
+SELECT COUNT(DISTINCT user_id) AS buyers_check
+FROM orders
+WHERE COALESCE(success, 0) IN (1, '1')
+AND DATE(order_datetime) = '2023-06-01';
+-- Overlap: users who both had payment-like event and successful order that day
+SELECT COUNT(DISTINCT e.user_id) AS overlap_check
+FROM events AS e
+JOIN orders AS o
+ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+WHERE DATE(e.event_datetime) = '2023-06-01'
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+AND COALESCE(o.success, 0) IN (1, '1');
+-- Check 5: signups on a date vs actives on date+7
+SELECT
+(SELECT COUNT(*)
+FROM users AS u
+WHERE DATE(COALESCE(u.signup_datetime, u.signup_date)) = '2023-06-01') AS signed_up,
+(SELECT COUNT(DISTINCT u2.user_id)
+FROM users AS u2
+JOIN events AS e2
+ON e2.user_id = u2.user_id
+WHERE DATE(COALESCE(u2.signup_datetime, u2.signup_date)) = '2023-06-01'
+AND DATE(e2.event_datetime) = DATE_ADD('2023-06-01', INTERVAL 7 DAY)) AS active_on_day_plus_7;
+-- Checks done for daily_activity_metrics
+/* ============================================================================
+STEP B — TRAILING 7-DAY BASELINES (daily_baselines)
+Purpose:
+- For each date, compute trailing 7-day baselines for key metrics.
+- Baseline window: D-7 .. D-1 (ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING).
+============================================================================ */
+DROP TABLE IF EXISTS daily_baselines;
+CREATE TABLE daily_baselines AS
+SELECT
+dam.date AS `date`,
+-- new_users
+dam.new_users AS new_users_actual,
+ROUND(
+AVG(dam.new_users) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS new_users_baseline,
+COUNT(dam.new_users) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING) AS new_users_baseline_count,
+-- dau
+dam.dau AS dau_actual,
+ROUND(
+AVG(dam.dau) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS dau_baseline,
+COUNT(dam.dau) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING) AS dau_baseline_count,
+-- total_events
+dam.total_events AS total_events_actual,
+ROUND(
+AVG(dam.total_events) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS total_events_baseline,
+COUNT(dam.total_events) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING)
+AS total_events_baseline_count,
+-- sessions
+dam.sessions AS sessions_actual,
+ROUND(
+AVG(dam.sessions) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS sessions_baseline,
+COUNT(dam.sessions) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING) AS sessions_baseline_count,
+-- total_orders
+dam.total_orders AS total_orders_actual,
+ROUND(
+AVG(dam.total_orders) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS total_orders_baseline,
+COUNT(dam.total_orders) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING)
+AS total_orders_baseline_count,
+-- revenue
+dam.revenue AS revenue_actual,
+ROUND(
+AVG(dam.revenue) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS revenue_baseline,
+COUNT(dam.revenue) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING) AS revenue_baseline_count,
+-- avg_order_value
+dam.avg_order_value AS avg_order_value_actual,
+ROUND(
+AVG(dam.avg_order_value) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS avg_order_value_baseline,
+COUNT(dam.avg_order_value) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING)
+AS avg_order_value_baseline_count,
+-- payment_conversion_pct
+dam.payment_conversion_pct AS payment_conversion_pct_actual,
+ROUND(
+AVG(dam.payment_conversion_pct) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS payment_conversion_pct_baseline,
+COUNT(dam.payment_conversion_pct) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING)
+AS payment_conversion_pct_baseline_count,
+-- browse_conversion_pct
+dam.browse_conversion_pct AS browse_conversion_pct_actual,
+ROUND(
+AVG(dam.browse_conversion_pct) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING),
+2
+) AS browse_conversion_pct_baseline,
+COUNT(dam.browse_conversion_pct) OVER (ORDER BY dam.date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING)
+AS browse_conversion_pct_baseline_count
+FROM daily_activity_metrics AS dam
+ORDER BY dam.date;
+-- Index on date for quick lookups
+ALTER TABLE daily_baselines
+ADD INDEX idx_db_date (date);
+-- SQL version: MySQL 8.0
+/* ============================================================================
+STEP C — DAILY ANOMALY FLAGS (daily_anomaly_flags)
+Purpose:
+- Compare daily actuals vs 7-day trailing baselines.
+- Flag SPIKE/DROP anomalies for core metrics:
+dau, total_orders, revenue, payment_conversion_pct,
+browse_conversion_pct, sessions, new_users.
+============================================================================ */
+DROP TABLE IF EXISTS daily_anomaly_flags;
+CREATE TABLE daily_anomaly_flags
+(
+date DATE NOT NULL,
+metric_name VARCHAR(64) NOT NULL,
+metric_actual DOUBLE,
+metric_baseline DOUBLE,
+baseline_count INT,
+deviation_pct DOUBLE, -- % change vs baseline
+anomaly_type ENUM('SPIKE','DROP','NOISE','NO_BASELINE') NOT NULL,
+anomaly_flag TINYINT(1) NOT NULL, -- 1 => anomaly, 0 => not
+notes VARCHAR(255) NULL,
+PRIMARY KEY (date, metric_name),
+INDEX idx_daf_flag (anomaly_flag),
+INDEX idx_daf_name (metric_name),
+INDEX idx_daf_date (date)
+) ENGINE = InnoDB;
+-- One INSERT with UNION ALL, one block per metric.
+INSERT INTO daily_anomaly_flags
+/* -----------------------------
+METRIC: dau
+----------------------------- */
+SELECT
+db.date,
+'dau' AS metric_name,
+dam.dau AS metric_actual,
+db.dau_baseline AS metric_baseline,
+db.dau_baseline_count AS baseline_count,
+CASE
+WHEN db.dau_baseline IS NULL OR db.dau_baseline = 0 THEN NULL
+ELSE ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2)
+END AS deviation_pct,
+CASE
+WHEN db.dau_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.dau_baseline IS NULL OR db.dau_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2) >= 30 THEN 'SPIKE'
+WHEN ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.dau_baseline_count < 3 THEN 0
+WHEN db.dau_baseline IS NULL OR db.dau_baseline = 0 THEN 0
+WHEN ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2) >= 30 THEN 1
+WHEN ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.dau_baseline_count < 3 THEN 'insufficient baseline (<3 days)'
+WHEN db.dau_baseline IS NULL OR db.dau_baseline = 0 THEN 'no baseline (NULL or 0)'
+WHEN ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2) >= 0 THEN
+CONCAT('+',
+ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2),
+'% vs baseline')
+ELSE CONCAT(
+ROUND(100.0 * (dam.dau - db.dau_baseline) / db.dau_baseline, 2),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+UNION ALL
+/* -----------------------------
+METRIC: total_orders
+----------------------------- */
+SELECT
+db.date,
+'total_orders' AS metric_name,
+dam.total_orders AS metric_actual,
+db.total_orders_baseline AS metric_baseline,
+db.total_orders_baseline_count AS baseline_count,
+CASE
+WHEN db.total_orders_baseline IS NULL OR db.total_orders_baseline = 0 THEN NULL
+ELSE ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+)
+END AS deviation_pct,
+CASE
+WHEN db.total_orders_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.total_orders_baseline IS NULL OR db.total_orders_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+) >= 30 THEN 'SPIKE'
+WHEN ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.total_orders_baseline_count < 3 THEN 0
+WHEN db.total_orders_baseline IS NULL OR db.total_orders_baseline = 0 THEN 0
+WHEN ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+) >= 30 THEN 1
+WHEN ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.total_orders_baseline_count < 3 THEN 'insufficient baseline (<3 days)'
+WHEN db.total_orders_baseline IS NULL OR db.total_orders_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+) >= 0 THEN
+CONCAT('+',
+ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+),
+'% vs baseline')
+ELSE CONCAT(
+ROUND(
+100.0 * (dam.total_orders - db.total_orders_baseline) / db.total_orders_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+UNION ALL
+/* -----------------------------
+METRIC: revenue
+----------------------------- */
+SELECT
+db.date,
+'revenue' AS metric_name,
+dam.revenue AS metric_actual,
+db.revenue_baseline AS metric_baseline,
+db.revenue_baseline_count AS baseline_count,
+CASE
+WHEN db.revenue_baseline IS NULL OR db.revenue_baseline = 0 THEN NULL
+ELSE ROUND(100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline, 2)
+END AS deviation_pct,
+CASE
+WHEN db.revenue_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.revenue_baseline IS NULL OR db.revenue_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline, 2) >= 30
+THEN 'SPIKE'
+WHEN ROUND(100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline, 2) <= -25
+THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.revenue_baseline_count < 3 THEN 0
+WHEN db.revenue_baseline IS NULL OR db.revenue_baseline = 0 THEN 0
+WHEN ROUND(100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline, 2) >= 30
+THEN 1
+WHEN ROUND(100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline, 2) <= -25
+THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.revenue_baseline_count < 3 THEN 'insufficient baseline (<3 days)'
+WHEN db.revenue_baseline IS NULL OR db.revenue_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline, 2) >= 0
+THEN CONCAT(
+'+',
+ROUND(
+100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline,
+2
+),
+'% vs baseline'
+)
+ELSE CONCAT(
+ROUND(
+100.0 * (dam.revenue - db.revenue_baseline) / db.revenue_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+UNION ALL
+/* -----------------------------
+METRIC: payment_conversion_pct
+----------------------------- */
+SELECT
+db.date,
+'payment_conversion_pct' AS metric_name,
+dam.payment_conversion_pct AS metric_actual,
+db.payment_conversion_pct_baseline AS metric_baseline,
+db.payment_conversion_pct_baseline_count AS baseline_count,
+CASE
+WHEN db.payment_conversion_pct_baseline IS NULL
+OR db.payment_conversion_pct_baseline = 0 THEN NULL
+ELSE ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+)
+END AS deviation_pct,
+CASE
+WHEN db.payment_conversion_pct_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.payment_conversion_pct_baseline IS NULL
+OR db.payment_conversion_pct_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+) >= 30 THEN 'SPIKE'
+WHEN ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.payment_conversion_pct_baseline_count < 3 THEN 0
+WHEN db.payment_conversion_pct_baseline IS NULL
+OR db.payment_conversion_pct_baseline = 0 THEN 0
+WHEN ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+) >= 30 THEN 1
+WHEN ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.payment_conversion_pct_baseline_count < 3
+THEN 'insufficient baseline (<3 days)'
+WHEN db.payment_conversion_pct_baseline IS NULL
+OR db.payment_conversion_pct_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+) >= 0 THEN
+CONCAT(
+'+',
+ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+),
+'% vs baseline'
+)
+ELSE CONCAT(
+ROUND(
+100.0 * (dam.payment_conversion_pct - db.payment_conversion_pct_baseline)
+/ db.payment_conversion_pct_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+UNION ALL
+/* -----------------------------
+METRIC: browse_conversion_pct
+----------------------------- */
+SELECT
+db.date,
+'browse_conversion_pct' AS metric_name,
+dam.browse_conversion_pct AS metric_actual,
+db.browse_conversion_pct_baseline AS metric_baseline,
+db.browse_conversion_pct_baseline_count AS baseline_count,
+CASE
+WHEN db.browse_conversion_pct_baseline IS NULL
+OR db.browse_conversion_pct_baseline = 0 THEN NULL
+ELSE ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+)
+END AS deviation_pct,
+CASE
+WHEN db.browse_conversion_pct_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.browse_conversion_pct_baseline IS NULL
+OR db.browse_conversion_pct_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+) >= 30 THEN 'SPIKE'
+WHEN ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.browse_conversion_pct_baseline_count < 3 THEN 0
+WHEN db.browse_conversion_pct_baseline IS NULL
+OR db.browse_conversion_pct_baseline = 0 THEN 0
+WHEN ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+) >= 30 THEN 1
+WHEN ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.browse_conversion_pct_baseline_count < 3
+THEN 'insufficient baseline (<3 days)'
+WHEN db.browse_conversion_pct_baseline IS NULL
+OR db.browse_conversion_pct_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+) >= 0 THEN
+CONCAT(
+'+',
+ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+),
+'% vs baseline'
+)
+ELSE CONCAT(
+ROUND(
+100.0 * (dam.browse_conversion_pct - db.browse_conversion_pct_baseline)
+/ db.browse_conversion_pct_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+UNION ALL
+/* -----------------------------
+METRIC: sessions
+----------------------------- */
+SELECT
+db.date,
+'sessions' AS metric_name,
+dam.sessions AS metric_actual,
+db.sessions_baseline AS metric_baseline,
+db.sessions_baseline_count AS baseline_count,
+CASE
+WHEN db.sessions_baseline IS NULL OR db.sessions_baseline = 0 THEN NULL
+ELSE ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+)
+END AS deviation_pct,
+CASE
+WHEN db.sessions_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.sessions_baseline IS NULL OR db.sessions_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+) >= 30 THEN 'SPIKE'
+WHEN ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.sessions_baseline_count < 3 THEN 0
+WHEN db.sessions_baseline IS NULL OR db.sessions_baseline = 0 THEN 0
+WHEN ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+) >= 30 THEN 1
+WHEN ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.sessions_baseline_count < 3 THEN 'insufficient baseline (<3 days)'
+WHEN db.sessions_baseline IS NULL OR db.sessions_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+) >= 0 THEN
+CONCAT(
+'+',
+ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+),
+'% vs baseline'
+)
+ELSE CONCAT(
+ROUND(
+100.0 * (dam.sessions - db.sessions_baseline) / db.sessions_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+UNION ALL
+/* -----------------------------
+METRIC: new_users
+----------------------------- */
+SELECT
+db.date,
+'new_users' AS metric_name,
+dam.new_users AS metric_actual,
+db.new_users_baseline AS metric_baseline,
+db.new_users_baseline_count AS baseline_count,
+CASE
+WHEN db.new_users_baseline IS NULL OR db.new_users_baseline = 0 THEN NULL
+ELSE ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+)
+END AS deviation_pct,
+CASE
+WHEN db.new_users_baseline_count < 3 THEN 'NO_BASELINE'
+WHEN db.new_users_baseline IS NULL OR db.new_users_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+) >= 30 THEN 'SPIKE'
+WHEN ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN db.new_users_baseline_count < 3 THEN 0
+WHEN db.new_users_baseline IS NULL OR db.new_users_baseline = 0 THEN 0
+WHEN ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+) >= 30 THEN 1
+WHEN ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN db.new_users_baseline_count < 3 THEN 'insufficient baseline (<3 days)'
+WHEN db.new_users_baseline IS NULL OR db.new_users_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+) >= 0 THEN
+CONCAT(
+'+',
+ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+),
+'% vs baseline'
+)
+ELSE CONCAT(
+ROUND(
+100.0 * (dam.new_users - db.new_users_baseline) / db.new_users_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM daily_activity_metrics AS dam
+JOIN daily_baselines AS db
+ON db.date = dam.date
+;
+-- SQL version: MySQL 8.0
+/* ============================================================================
+STEP D1 — SEGMENT DAILY METRICS
+Purpose:
+- Build per-day, per-segment metrics for:
+device, acquisition_channel, gender, age_group, top cities.
+- Metrics:
+dau, total_orders, revenue, payment_users, checkout_users,
+payment_conversion_pct, browse_conversion_pct.
+Notes:
+- Cities are restricted to the top N by user count (tune @TOP_CITY_LIMIT_INT).
+============================================================================ */
+-- 0) Parameter: how many cities to keep for city-level breakdowns
+SET @TOP_CITY_LIMIT_INT := 20;
+-- 1) Top cities by user count (based on segment_funnel_summary)
+DROP TEMPORARY TABLE IF EXISTS top_cities;
+CREATE TEMPORARY TABLE top_cities AS
+SELECT city
+FROM (
+SELECT
+segment_value AS city,
+n_users,
+ROW_NUMBER() OVER (ORDER BY n_users DESC) AS rn
+FROM segment_funnel_summary
+WHERE segment_type = 'city'
+) t
+WHERE t.rn <= @TOP_CITY_LIMIT_INT;
+ALTER TABLE top_cities
+ADD INDEX (city);
+-------------------------------------------------------------------------------
+-- 2) Event-level aggregates per date & segment
+-- - dau
+-- - payment_event_users
+-- - users_browsed
+-- - users_viewed
+-------------------------------------------------------------------------------
+DROP TEMPORARY TABLE IF EXISTS seg_events;
+CREATE TEMPORARY TABLE seg_events AS
+/* DEVICE */
+SELECT
+DATE(e.event_datetime) AS dt,
+'device' AS segment_type,
+u.device AS segment_value,
+COUNT(DISTINCT e.user_id) AS dau,
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+THEN e.user_id
+END) AS payment_event_users,
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%browse%' THEN e.user_id
+END) AS users_browsed,
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%view%'
+OR LOWER(e.event_type) LIKE '%menu%' THEN e.user_id
+END) AS users_viewed
+FROM events e
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+GROUP BY DATE(e.event_datetime), u.device
+UNION ALL
+/* ACQUISITION CHANNEL */
+SELECT
+DATE(e.event_datetime),
+'acquisition_channel',
+u.acquisition_channel,
+COUNT(DISTINCT e.user_id),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%browse%' THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%view%'
+OR LOWER(e.event_type) LIKE '%menu%' THEN e.user_id
+END)
+FROM events e
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+GROUP BY DATE(e.event_datetime), u.acquisition_channel
+UNION ALL
+/* GENDER */
+SELECT
+DATE(e.event_datetime),
+'gender',
+u.gender,
+COUNT(DISTINCT e.user_id),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%browse%' THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%view%'
+OR LOWER(e.event_type) LIKE '%menu%' THEN e.user_id
+END)
+FROM events e
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+GROUP BY DATE(e.event_datetime), u.gender
+UNION ALL
+/* AGE_GROUP */
+SELECT
+DATE(e.event_datetime),
+'age_group',
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END AS age_group,
+COUNT(DISTINCT e.user_id),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%browse%' THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%view%'
+OR LOWER(e.event_type) LIKE '%menu%' THEN e.user_id
+END)
+FROM events e
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+GROUP BY
+DATE(e.event_datetime),
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END
+UNION ALL
+/* CITY (restricted to top cities) */
+SELECT
+DATE(e.event_datetime),
+'city',
+u.city,
+COUNT(DISTINCT e.user_id),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%browse%' THEN e.user_id
+END),
+COUNT(DISTINCT CASE
+WHEN LOWER(e.event_type) LIKE '%view%'
+OR LOWER(e.event_type) LIKE '%menu%' THEN e.user_id
+END)
+FROM events e
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+AND u.city IN (SELECT city FROM top_cities)
+GROUP BY DATE(e.event_datetime), u.city
+;
+ALTER TABLE seg_events
+ADD INDEX idx_se_dt (dt),
+ADD INDEX idx_se_seg (segment_type, segment_value);
+-------------------------------------------------------------------------------
+-- 3) Orders per date & segment (successful only)
+-------------------------------------------------------------------------------
+DROP TEMPORARY TABLE IF EXISTS seg_orders;
+CREATE TEMPORARY TABLE seg_orders AS
+/* DEVICE */
+SELECT
+DATE(o.order_datetime) AS dt,
+'device' AS segment_type,
+u.device AS segment_value,
+COUNT(*) AS total_orders,
+COALESCE(SUM(o.order_value), 0) AS revenue,
+COUNT(DISTINCT o.user_id) AS buyers
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE o.order_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+GROUP BY DATE(o.order_datetime), u.device
+UNION ALL
+/* ACQUISITION CHANNEL */
+SELECT
+DATE(o.order_datetime),
+'acquisition_channel',
+u.acquisition_channel,
+COUNT(*),
+COALESCE(SUM(o.order_value), 0),
+COUNT(DISTINCT o.user_id)
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE o.order_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+GROUP BY DATE(o.order_datetime), u.acquisition_channel
+UNION ALL
+/* GENDER */
+SELECT
+DATE(o.order_datetime),
+'gender',
+u.gender,
+COUNT(*),
+COALESCE(SUM(o.order_value), 0),
+COUNT(DISTINCT o.user_id)
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE o.order_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+GROUP BY DATE(o.order_datetime), u.gender
+UNION ALL
+/* AGE_GROUP */
+SELECT
+DATE(o.order_datetime),
+'age_group',
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END,
+COUNT(*),
+COALESCE(SUM(o.order_value), 0),
+COUNT(DISTINCT o.user_id)
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE o.order_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+GROUP BY
+DATE(o.order_datetime),
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END
+UNION ALL
+/* CITY (top cities only) */
+SELECT
+DATE(o.order_datetime),
+'city',
+u.city,
+COUNT(*),
+COALESCE(SUM(o.order_value), 0),
+COUNT(DISTINCT o.user_id)
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE o.order_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+AND u.city IN (SELECT city FROM top_cities)
+GROUP BY DATE(o.order_datetime), u.city
+;
+ALTER TABLE seg_orders
+ADD INDEX idx_so_dt (dt),
+ADD INDEX idx_so_seg (segment_type, segment_value);
+-------------------------------------------------------------------------------
+-- 4) Checkout starters per date & segment (first checkout timestamp)
+-------------------------------------------------------------------------------
+DROP TEMPORARY TABLE IF EXISTS seg_checkout;
+CREATE TEMPORARY TABLE seg_checkout AS
+/* DEVICE */
+SELECT
+DATE(ufs.t_checkout) AS dt,
+'device' AS segment_type,
+u.device AS segment_value,
+COUNT(DISTINCT ufs.user_id) AS checkout_users
+FROM user_first_stages ufs
+JOIN users u ON u.user_id = ufs.user_id
+WHERE ufs.t_checkout IS NOT NULL
+GROUP BY DATE(ufs.t_checkout), u.device
+UNION ALL
+/* ACQUISITION CHANNEL */
+SELECT
+DATE(ufs.t_checkout),
+'acquisition_channel',
+u.acquisition_channel,
+COUNT(DISTINCT ufs.user_id)
+FROM user_first_stages ufs
+JOIN users u ON u.user_id = ufs.user_id
+WHERE ufs.t_checkout IS NOT NULL
+GROUP BY DATE(ufs.t_checkout), u.acquisition_channel
+UNION ALL
+/* GENDER */
+SELECT
+DATE(ufs.t_checkout),
+'gender',
+u.gender,
+COUNT(DISTINCT ufs.user_id)
+FROM user_first_stages ufs
+JOIN users u ON u.user_id = ufs.user_id
+WHERE ufs.t_checkout IS NOT NULL
+GROUP BY DATE(ufs.t_checkout), u.gender
+UNION ALL
+/* AGE_GROUP */
+SELECT
+DATE(ufs.t_checkout),
+'age_group',
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END,
+COUNT(DISTINCT ufs.user_id)
+FROM user_first_stages ufs
+JOIN users u ON u.user_id = ufs.user_id
+WHERE ufs.t_checkout IS NOT NULL
+GROUP BY
+DATE(ufs.t_checkout),
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END
+UNION ALL
+/* CITY (top cities only) */
+SELECT
+DATE(ufs.t_checkout),
+'city',
+u.city,
+COUNT(DISTINCT ufs.user_id)
+FROM user_first_stages ufs
+JOIN users u ON u.user_id = ufs.user_id
+WHERE ufs.t_checkout IS NOT NULL
+AND u.city IN (SELECT city FROM top_cities)
+GROUP BY DATE(ufs.t_checkout), u.city
+;
+ALTER TABLE seg_checkout
+ADD INDEX idx_sc_dt (dt),
+ADD INDEX idx_sc_seg (segment_type, segment_value);
+-------------------------------------------------------------------------------
+-- 5) Overlap: payment-event users who also placed a successful order
+-- on the same date & segment (to avoid double-counting)
+-------------------------------------------------------------------------------
+DROP TEMPORARY TABLE IF EXISTS seg_overlap;
+CREATE TEMPORARY TABLE seg_overlap AS
+/* DEVICE */
+SELECT
+DATE(e.event_datetime) AS dt,
+'device' AS segment_type,
+u.device AS segment_value,
+COUNT(DISTINCT e.user_id) AS overlap_users
+FROM events e
+JOIN orders o ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+GROUP BY DATE(e.event_datetime), u.device
+UNION ALL
+/* ACQUISITION CHANNEL */
+SELECT
+DATE(e.event_datetime),
+'acquisition_channel',
+u.acquisition_channel,
+COUNT(DISTINCT e.user_id)
+FROM events e
+JOIN orders o ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+GROUP BY DATE(e.event_datetime), u.acquisition_channel
+UNION ALL
+/* GENDER */
+SELECT
+DATE(e.event_datetime),
+'gender',
+u.gender,
+COUNT(DISTINCT e.user_id)
+FROM events e
+JOIN orders o ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+GROUP BY DATE(e.event_datetime), u.gender
+UNION ALL
+/* AGE_GROUP */
+SELECT
+DATE(e.event_datetime),
+'age_group',
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END,
+COUNT(DISTINCT e.user_id)
+FROM events e
+JOIN orders o ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+GROUP BY
+DATE(e.event_datetime),
+CASE
+WHEN u.age BETWEEN 18 AND 24 THEN '18-24'
+WHEN u.age BETWEEN 25 AND 34 THEN '25-34'
+WHEN u.age BETWEEN 35 AND 44 THEN '35-44'
+WHEN u.age >= 45 THEN '45+'
+ELSE 'unknown'
+END
+UNION ALL
+/* CITY (top cities only) */
+SELECT
+DATE(e.event_datetime),
+'city',
+u.city,
+COUNT(DISTINCT e.user_id)
+FROM events e
+JOIN orders o ON o.user_id = e.user_id
+AND DATE(o.order_datetime) = DATE(e.event_datetime)
+JOIN users u ON u.user_id = e.user_id
+WHERE e.event_datetime IS NOT NULL
+AND COALESCE(o.success, 0) IN (1, '1')
+AND (
+LOWER(e.event_type) LIKE '%pay%'
+OR LOWER(e.event_type) LIKE '%payment%'
+OR LOWER(e.event_type) LIKE '%paid%'
+OR LOWER(e.event_type) LIKE '%order_complete%'
+OR LOWER(e.event_type) LIKE '%charge%'
+)
+AND u.city IN (SELECT city FROM top_cities)
+GROUP BY DATE(e.event_datetime), u.city
+;
+ALTER TABLE seg_overlap
+ADD INDEX idx_sover_dt (dt),
+ADD INDEX idx_sover_seg (segment_type, segment_value);
+-------------------------------------------------------------------------------
+-- 6) Final table: segment_daily_metrics (per date, per segment)
+-------------------------------------------------------------------------------
+DROP TABLE IF EXISTS segment_daily_metrics;
+CREATE TABLE segment_daily_metrics AS
+SELECT
+d.dt AS date,
+d.segment_type,
+d.segment_value,
+COALESCE(d.dau, 0) AS dau,
+COALESCE(o.total_orders, 0) AS total_orders,
+COALESCE(o.revenue, 0.0) AS revenue,
+-- payment_users = payment_event_users + buyers - overlap_users
+COALESCE(d.payment_event_users, 0)
++ COALESCE(o.buyers, 0)
+- COALESCE(sp.overlap_users, 0) AS payment_users,
+COALESCE(c.checkout_users, 0) AS checkout_users,
+-- payment conversion in PERCENT (NULL when no checkout users)
+CASE
+WHEN COALESCE(c.checkout_users, 0) = 0 THEN NULL
+ELSE ROUND(
+100.0 * (
+COALESCE(d.payment_event_users, 0)
++ COALESCE(o.buyers, 0)
+- COALESCE(sp.overlap_users, 0)
+) / NULLIF(c.checkout_users, 0),
+2
+)
+END AS payment_conversion_pct,
+-- browse conversion in PERCENT (viewers / browsers; NULL when no browsers)
+CASE
+WHEN COALESCE(d.users_browsed, 0) = 0 THEN NULL
+ELSE ROUND(
+100.0 * COALESCE(d.users_viewed, 0)
+/ NULLIF(d.users_browsed, 0),
+2
+)
+END AS browse_conversion_pct
+FROM (
+-- base: all per-date, per-segment event rows
+SELECT
+dt,
+segment_type,
+segment_value,
+dau,
+payment_event_users,
+users_browsed,
+users_viewed
+FROM seg_events
+) d
+LEFT JOIN seg_orders o ON o.dt = d.dt
+AND o.segment_type = d.segment_type
+AND o.segment_value = d.segment_value
+LEFT JOIN seg_checkout c ON c.dt = d.dt
+AND c.segment_type = d.segment_type
+AND c.segment_value = d.segment_value
+LEFT JOIN seg_overlap sp ON sp.dt = d.dt
+AND sp.segment_type = d.segment_type
+AND sp.segment_value = d.segment_value
+ORDER BY d.dt, d.segment_type, d.segment_value
+;
+ALTER TABLE segment_daily_metrics
+ADD INDEX idx_sdm_date (date),
+ADD INDEX idx_sdm_type (segment_type),
+ADD INDEX idx_sdm_value (segment_value);
+-------------------------------------------------------------------------------
+-- 7) Quick sanity checks
+-------------------------------------------------------------------------------
+-- Total rows
+SELECT COUNT(*) AS total_rows
+FROM segment_daily_metrics;
+-- How many segment values per segment_type
+SELECT segment_type,
+COUNT(DISTINCT segment_value) AS distinct_values
+FROM segment_daily_metrics
+GROUP BY segment_type;
+-- Example cross-check: device DAU vs global DAU for a sample date
+-- Replace '2023-06-08' with a real date from your dataset.
+SELECT SUM(dau) AS sum_device_dau
+FROM segment_daily_metrics
+WHERE date = '2023-06-08'
+AND segment_type = 'device';
+SELECT dau AS global_dau
+FROM daily_activity_metrics
+WHERE date = '2023-06-08';
+-- SQL version: MySQL 8.0
+/* ============================================================================
+D1 — Documentation & sanity checks for segment_daily_metrics
+============================================================================ */
+-- Total number of rows in segment_daily_metrics
+SELECT COUNT(*) AS segment_daily_metrics_row_count
+FROM segment_daily_metrics;
+-- 10 sample rows from the most recent date
+SELECT *
+FROM segment_daily_metrics
+WHERE date = (SELECT MAX(date) FROM segment_daily_metrics)
+ORDER BY segment_type, segment_value
+LIMIT 10;
+-- 10 sample summary rows from latest date (clean view)
+SELECT
+segment_type,
+segment_value,
+dau,
+total_orders,
+revenue,
+payment_conversion_pct,
+browse_conversion_pct
+FROM segment_daily_metrics
+WHERE date = (SELECT MAX(date) FROM segment_daily_metrics)
+ORDER BY segment_type, segment_value
+LIMIT 10;
+-- Device-level DAU for the latest date
+SELECT
+segment_value AS device,
+dau AS device_dau
+FROM segment_daily_metrics
+WHERE segment_type = 'device'
+AND date = (SELECT MAX(date) FROM segment_daily_metrics)
+ORDER BY device_dau DESC;
+-- Global DAU for the same latest date (to compare against sum of device DAU)
+SELECT
+date AS global_date,
+dau AS global_dau
+FROM daily_activity_metrics
+WHERE date = (SELECT MAX(date) FROM segment_daily_metrics);
+-- Top device by total users over lifetime (from segment_funnel_summary)
+SELECT segment_value AS top_device
+FROM segment_funnel_summary
+WHERE segment_type = 'device'
+ORDER BY n_users DESC
+LIMIT 1;
+-- (Optional) You can add a segment_daily_metrics revenue query for that top device here if you want.
+-- Raw revenue from orders for the same top device and latest date
+SELECT
+DATE(o.order_datetime) AS order_date,
+u.device AS device,
+SUM(o.order_value) AS raw_orders_revenue,
+COUNT(*) AS raw_orders_count
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE COALESCE(o.success, 0) IN (1, '1')
+AND DATE(o.order_datetime) = (SELECT MAX(date) FROM segment_daily_metrics)
+AND u.device = (
+SELECT segment_value
+FROM segment_funnel_summary
+WHERE segment_type = 'device'
+ORDER BY n_users DESC
+LIMIT 1
+)
+GROUP BY DATE(o.order_datetime), u.device;
+-- Top city by total users
+SELECT segment_value AS top_city
+FROM segment_funnel_summary
+WHERE segment_type = 'city'
+ORDER BY n_users DESC
+LIMIT 1;
+-- Segment revenue for top city on latest date (from segment_daily_metrics)
+SELECT
+date,
+segment_value,
+revenue AS segment_reported_revenue
+FROM segment_daily_metrics
+WHERE segment_type = 'city'
+AND segment_value = (
+SELECT segment_value
+FROM segment_funnel_summary
+WHERE segment_type = 'city'
+ORDER BY n_users DESC
+LIMIT 1
+)
+AND date = (SELECT MAX(date) FROM segment_daily_metrics);
+-- Raw orders revenue for the same top city and latest date
+SELECT
+DATE(o.order_datetime) AS order_date,
+u.city AS city,
+SUM(o.order_value) AS raw_orders_revenue,
+COUNT(*) AS raw_orders_count
+FROM orders o
+JOIN users u ON u.user_id = o.user_id
+WHERE COALESCE(o.success, 0) IN (1, '1')
+AND DATE(o.order_datetime) = (SELECT MAX(date) FROM segment_daily_metrics)
+AND u.city = (
+SELECT segment_value
+FROM segment_funnel_summary
+WHERE segment_type = 'city'
+ORDER BY n_users DESC
+LIMIT 1
+)
+GROUP BY DATE(o.order_datetime), u.city;
+-- Average payment conversion by device, across all dates
+-- IMPORTANT: payment_conversion_pct in segment_daily_metrics is already in PERCENT (0–100),
+-- so we DO NOT multiply by 100 again.
+SELECT
+segment_value AS device,
+ROUND(AVG(payment_conversion_pct), 2) AS avg_payment_conversion_percent
+FROM segment_daily_metrics
+WHERE segment_type = 'device'
+AND payment_conversion_pct IS NOT NULL
+GROUP BY segment_value
+ORDER BY avg_payment_conversion_percent DESC;
+-- Date range and number of distinct dates covered
+SELECT
+MIN(date) AS earliest_date,
+MAX(date) AS latest_date,
+COUNT(DISTINCT date) AS number_of_dates
+FROM segment_daily_metrics;
+/* ============================================================================
+D2 — segment_daily_baselines
+Purpose:
+- For each date × segment_type × segment_value, compute trailing 7-day
+baselines (D-7 .. D-1) and baseline counts for:
+dau, total_orders, revenue, payment_conversion_pct, browse_conversion_pct.
+============================================================================ */
+DROP TABLE IF EXISTS segment_daily_baselines;
+CREATE TABLE segment_daily_baselines AS
+SELECT
+date,
+segment_type,
+segment_value,
+-- Actuals copied from segment_daily_metrics
+dau AS dau_actual,
+total_orders AS total_orders_actual,
+revenue AS revenue_actual,
+payment_conversion_pct AS payment_conversion_pct_actual,
+browse_conversion_pct AS browse_conversion_pct_actual,
+-- Trailing 7-day baselines (D-7 .. D-1) and counts (non-NULL days)
+-- DAU baseline
+ROUND(
+AVG(dau) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+),
+2
+) AS dau_baseline,
+COUNT(dau) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+) AS dau_baseline_count,
+-- Total orders baseline
+ROUND(
+AVG(total_orders) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+),
+2
+) AS total_orders_baseline,
+COUNT(total_orders) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+) AS total_orders_baseline_count,
+-- Revenue baseline
+ROUND(
+AVG(revenue) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+),
+2
+) AS revenue_baseline,
+COUNT(revenue) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+) AS revenue_baseline_count,
+-- Payment conversion baseline (percent, 4 decimals for a bit more precision)
+ROUND(
+AVG(payment_conversion_pct) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+),
+4
+) AS payment_conversion_pct_baseline,
+COUNT(payment_conversion_pct) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+) AS payment_conversion_pct_baseline_count,
+-- Browse conversion baseline (percent)
+ROUND(
+AVG(browse_conversion_pct) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+),
+4
+) AS browse_conversion_pct_baseline,
+COUNT(browse_conversion_pct) OVER (
+PARTITION BY segment_type, segment_value
+ORDER BY date
+ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+) AS browse_conversion_pct_baseline_count
+FROM segment_daily_metrics
+ORDER BY segment_type, segment_value, date;
+ALTER TABLE segment_daily_baselines
+ADD INDEX idx_sdb_type (segment_type),
+ADD INDEX idx_sdb_value (segment_value),
+ADD INDEX idx_sdb_date (date);
+/* ============================================================================
+D2 — Validation queries (manual checks)
+============================================================================ */
+-- 1) Row count parity: should match segment_daily_metrics
+SELECT
+(SELECT COUNT(*) FROM segment_daily_metrics) AS metrics_rows,
+(SELECT COUNT(*) FROM segment_daily_baselines) AS baseline_rows;
+-- 2) Earliest dates: baseline_count should be 0 for the very first rows per segment
+SELECT
+date,
+segment_type,
+segment_value,
+dau_baseline_count,
+total_orders_baseline_count,
+revenue_baseline_count
+FROM segment_daily_baselines
+ORDER BY date
+LIMIT 20;
+-- 3) Example date where you expect full 7-day history
+-- (using earliest_date + 8 days from segment_daily_metrics as a safe pick)
+SELECT
+date,
+segment_type,
+segment_value,
+dau_baseline,
+dau_baseline_count
+FROM segment_daily_baselines
+WHERE date = (
+SELECT DATE_ADD(MIN(date), INTERVAL 8 DAY)
+FROM segment_daily_metrics
+)
+ORDER BY segment_type, segment_value
+LIMIT 100;
+-- 4) Manual trailing-7 AVG cross-check for a chosen segment/date (edit values)
+-- Example: device = 'Android', date = '2023-06-20'
+SELECT
+ROUND(AVG(dau), 2) AS manual_dau_baseline,
+COUNT(dau) AS manual_dau_baseline_count
+FROM segment_daily_metrics
+WHERE segment_type = 'device'
+AND segment_value = 'Android'
+AND date BETWEEN DATE_SUB('2023-06-20', INTERVAL 7 DAY)
+AND DATE_SUB('2023-06-20', INTERVAL 1 DAY);
+-- Compare manual result to stored baseline
+SELECT
+date,
+segment_type,
+segment_value,
+dau_actual,
+dau_baseline,
+dau_baseline_count,
+total_orders_actual,
+total_orders_baseline,
+total_orders_baseline_count,
+revenue_actual,
+revenue_baseline,
+revenue_baseline_count,
+payment_conversion_pct_actual,
+payment_conversion_pct_baseline,
+payment_conversion_pct_baseline_count,
+browse_conversion_pct_actual,
+browse_conversion_pct_baseline,
+browse_conversion_pct_baseline_count
+FROM segment_daily_baselines
+WHERE segment_type = 'device'
+AND segment_value = 'Android'
+AND date = '2023-06-20';
+-- 5) Where baseline_count = 0 for that same segment (start of history)
+SELECT
+date,
+dau_actual,
+dau_baseline,
+dau_baseline_count
+FROM segment_daily_baselines
+WHERE segment_type = 'device'
+AND segment_value = 'Android'
+AND dau_baseline_count = 0
+ORDER BY date
+LIMIT 100;
+-- 6) Short summary of baseline coverage
+SELECT
+(SELECT COUNT(*) FROM segment_daily_baselines) AS baseline_total_rows,
+(SELECT COUNT(DISTINCT date) FROM segment_daily_baselines) AS baseline_distinct_dates,
+(SELECT COUNT(DISTINCT segment_type) FROM segment_daily_baselines) AS baseline_segment_types,
+(SELECT COUNT(DISTINCT segment_value) FROM segment_daily_baselines) AS baseline_segment_values;
+-- SQL version: MySQL 8.0
+-- Step 3A: Segment-level anomaly flags
+-- ------------------------------------
+DROP TABLE IF EXISTS segment_anomaly_flags;
+CREATE TABLE segment_anomaly_flags
+(
+date DATE NOT NULL,
+segment_type VARCHAR(64) NOT NULL,
+segment_value VARCHAR(128) NOT NULL,
+metric_name VARCHAR(64) NOT NULL,
+metric_actual DOUBLE,
+metric_baseline DOUBLE,
+baseline_count INT,
+deviation_pct DOUBLE, -- percent change vs baseline
+anomaly_type ENUM ('SPIKE','DROP','NOISE','NO_BASELINE') NOT NULL,
+anomaly_flag TINYINT(1) NOT NULL, -- 1 = anomaly, 0 = not
+notes VARCHAR(255),
+PRIMARY KEY (date, segment_type(16), segment_value(64), metric_name),
+INDEX (anomaly_flag),
+INDEX (metric_name),
+INDEX (date)
+) ENGINE = InnoDB;
+INSERT INTO segment_anomaly_flags
+-- 1) DAU anomalies
+SELECT
+m.date,
+m.segment_type,
+m.segment_value,
+'dau' AS metric_name,
+m.dau AS metric_actual,
+b.dau_baseline AS metric_baseline,
+b.dau_baseline_count AS baseline_count,
+CASE
+WHEN b.dau_baseline IS NULL OR b.dau_baseline = 0 THEN NULL
+ELSE ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2)
+END AS deviation_pct,
+CASE
+WHEN COALESCE(b.dau_baseline_count, 0) < 3 THEN 'NO_BASELINE'
+WHEN b.dau_baseline IS NULL OR b.dau_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2) >= 30 THEN 'SPIKE'
+WHEN ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN COALESCE(b.dau_baseline_count, 0) < 3 THEN 0
+WHEN b.dau_baseline IS NULL OR b.dau_baseline = 0 THEN 0
+WHEN ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2) >= 30 THEN 1
+WHEN ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN COALESCE(b.dau_baseline_count, 0) < 3 THEN 'insufficient baseline (<3 days)'
+WHEN b.dau_baseline IS NULL OR b.dau_baseline = 0 THEN 'no baseline (NULL or 0)'
+WHEN ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2) >= 0 THEN
+CONCAT('+', ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2), '% vs baseline')
+ELSE CONCAT(ROUND(100.0 * (m.dau - b.dau_baseline) / b.dau_baseline, 2), '% vs baseline')
+END AS notes
+FROM segment_daily_metrics AS m
+JOIN segment_daily_baselines AS b
+ON m.date = b.date
+AND m.segment_type = b.segment_type
+AND m.segment_value = b.segment_value
+UNION ALL
+-- 2) total_orders anomalies
+SELECT
+m.date,
+m.segment_type,
+m.segment_value,
+'total_orders' AS metric_name,
+m.total_orders AS metric_actual,
+b.total_orders_baseline AS metric_baseline,
+b.total_orders_baseline_count AS baseline_count,
+CASE
+WHEN b.total_orders_baseline IS NULL OR b.total_orders_baseline = 0 THEN NULL
+ELSE ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2)
+END AS deviation_pct,
+CASE
+WHEN COALESCE(b.total_orders_baseline_count, 0) < 3 THEN 'NO_BASELINE'
+WHEN b.total_orders_baseline IS NULL OR b.total_orders_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2) >= 30 THEN 'SPIKE'
+WHEN ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN COALESCE(b.total_orders_baseline_count, 0) < 3 THEN 0
+WHEN b.total_orders_baseline IS NULL OR b.total_orders_baseline = 0 THEN 0
+WHEN ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2) >= 30 THEN 1
+WHEN ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN COALESCE(b.total_orders_baseline_count, 0) < 3 THEN 'insufficient baseline (<3 days)'
+WHEN b.total_orders_baseline IS NULL OR b.total_orders_baseline = 0 THEN 'no baseline (NULL or 0)'
+WHEN ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2) >= 0 THEN
+CONCAT('+', ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2),
+'% vs baseline')
+ELSE CONCAT(ROUND(100.0 * (m.total_orders - b.total_orders_baseline) / b.total_orders_baseline, 2),
+'% vs baseline')
+END AS notes
+FROM segment_daily_metrics AS m
+JOIN segment_daily_baselines AS b
+ON m.date = b.date
+AND m.segment_type = b.segment_type
+AND m.segment_value = b.segment_value
+UNION ALL
+-- 3) revenue anomalies
+SELECT
+m.date,
+m.segment_type,
+m.segment_value,
+'revenue' AS metric_name,
+m.revenue AS metric_actual,
+b.revenue_baseline AS metric_baseline,
+b.revenue_baseline_count AS baseline_count,
+CASE
+WHEN b.revenue_baseline IS NULL OR b.revenue_baseline = 0 THEN NULL
+ELSE ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2)
+END AS deviation_pct,
+CASE
+WHEN COALESCE(b.revenue_baseline_count, 0) < 3 THEN 'NO_BASELINE'
+WHEN b.revenue_baseline IS NULL OR b.revenue_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2) >= 30 THEN 'SPIKE'
+WHEN ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN COALESCE(b.revenue_baseline_count, 0) < 3 THEN 0
+WHEN b.revenue_baseline IS NULL OR b.revenue_baseline = 0 THEN 0
+WHEN ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2) >= 30 THEN 1
+WHEN ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN COALESCE(b.revenue_baseline_count, 0) < 3 THEN 'insufficient baseline (<3 days)'
+WHEN b.revenue_baseline IS NULL OR b.revenue_baseline = 0 THEN 'no baseline (NULL or 0)'
+WHEN ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2) >= 0 THEN
+CONCAT('+', ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2),
+'% vs baseline')
+ELSE CONCAT(ROUND(100.0 * (m.revenue - b.revenue_baseline) / b.revenue_baseline, 2),
+'% vs baseline')
+END AS notes
+FROM segment_daily_metrics AS m
+JOIN segment_daily_baselines AS b
+ON m.date = b.date
+AND m.segment_type = b.segment_type
+AND m.segment_value = b.segment_value
+UNION ALL
+-- 4) payment_conversion_pct anomalies
+SELECT
+m.date,
+m.segment_type,
+m.segment_value,
+'payment_conversion_pct' AS metric_name,
+m.payment_conversion_pct AS metric_actual,
+b.payment_conversion_pct_baseline AS metric_baseline,
+b.payment_conversion_pct_baseline_count AS baseline_count,
+CASE
+WHEN b.payment_conversion_pct_baseline IS NULL
+OR b.payment_conversion_pct_baseline = 0 THEN NULL
+ELSE ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+)
+END AS deviation_pct,
+CASE
+WHEN COALESCE(b.payment_conversion_pct_baseline_count, 0) < 3 THEN 'NO_BASELINE'
+WHEN b.payment_conversion_pct_baseline IS NULL
+OR b.payment_conversion_pct_baseline = 0 THEN 'NO_BASELINE'
+WHEN ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+) >= 30 THEN 'SPIKE'
+WHEN ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+) <= -25 THEN 'DROP'
+ELSE 'NOISE'
+END AS anomaly_type,
+CASE
+WHEN COALESCE(b.payment_conversion_pct_baseline_count, 0) < 3 THEN 0
+WHEN b.payment_conversion_pct_baseline IS NULL
+OR b.payment_conversion_pct_baseline = 0 THEN 0
+WHEN ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+) >= 30 THEN 1
+WHEN ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+) <= -25 THEN 1
+ELSE 0
+END AS anomaly_flag,
+CASE
+WHEN COALESCE(b.payment_conversion_pct_baseline_count, 0) < 3
+THEN 'insufficient baseline (<3 days)'
+WHEN b.payment_conversion_pct_baseline IS NULL
+OR b.payment_conversion_pct_baseline = 0
+THEN 'no baseline (NULL or 0)'
+WHEN ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+) >= 0 THEN
+CONCAT(
+'+',
+ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+),
+'% vs baseline'
+)
+ELSE CONCAT(
+ROUND(
+100.0 * (m.payment_conversion_pct - b.payment_conversion_pct_baseline)
+/ b.payment_conversion_pct_baseline,
+2
+),
+'% vs baseline'
+)
+END AS notes
+FROM segment_daily_metrics AS m
+JOIN segment_daily_baselines AS b
+ON m.date = b.date
+AND m.segment_type = b.segment_type
+AND m.segment_value = b.segment_value
+;
+-- Documentation / sanity checks for segment_anomaly_flags
+SHOW CREATE TABLE segment_anomaly_flags;
+SELECT
+(SELECT COUNT(*) FROM segment_anomaly_flags) AS total_rows,
+(SELECT COUNT(*) FROM segment_anomaly_flags WHERE anomaly_flag = 1) AS flagged_rows;
+SELECT
+date,
+segment_type,
+segment_value,
+metric_name,
+metric_actual,
+metric_baseline,
+deviation_pct,
+anomaly_type,
+anomaly_flag,
+notes
+FROM segment_anomaly_flags
+WHERE anomaly_flag = 1
+ORDER BY ABS(deviation_pct) DESC
+LIMIT 5;
+-- Detailed cross-check for a specific anomaly (example values)
+SELECT
+a.date,
+a.segment_type,
+a.segment_value,
+a.metric_name,
+a.metric_actual,
+a.metric_baseline,
+a.deviation_pct AS anomaly_deviation_pct,
+m.dau,
+m.total_orders,
+m.revenue,
+m.payment_conversion_pct,
+b.dau_baseline,
+b.total_orders_baseline,
+b.revenue_baseline,
+b.payment_conversion_pct_baseline
+FROM segment_anomaly_flags a
+LEFT JOIN segment_daily_metrics m
+ON a.date = m.date
+AND a.segment_type = m.segment_type
+AND a.segment_value = m.segment_value
+LEFT JOIN segment_daily_baselines b
+ON a.date = b.date
+AND a.segment_type = b.segment_type
+AND a.segment_value = b.segment_value
+WHERE a.date = '2023-06-12'
+AND a.segment_type = 'device'
+AND a.segment_value = 'Android'
+AND a.metric_name = 'dau';
+-- Distribution of anomaly types by metric
+SELECT
+anomaly_type,
+metric_name,
+COUNT(*) AS count
+FROM segment_anomaly_flags
+GROUP BY anomaly_type, metric_name
+ORDER BY count DESC;
+-- Quick consistency check for DROP anomalies (sanity)
+SELECT COUNT(*) AS mismatched_drop_count
+FROM segment_anomaly_flags
+WHERE anomaly_type = 'DROP'
+AND (deviation_pct IS NULL OR deviation_pct > -25);
+-- Step 3B: High-level insights_summary
+-- ------------------------------------
+DROP TABLE IF EXISTS insights_summary;
+CREATE TABLE insights_summary
+(
+insight_id INT AUTO_INCREMENT PRIMARY KEY,
+insight_type VARCHAR(32) NOT NULL,
+description TEXT NOT NULL,
+metric_value DOUBLE,
+related_segment VARCHAR(128),
+related_date DATE NULL,
+severity VARCHAR(10),
+source_table VARCHAR(64),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+INDEX (insight_type),
+INDEX (severity),
+INDEX (source_table)
+) ENGINE = InnoDB;
+-- 1) Funnel bottleneck insight: smallest conversion % across main funnel steps
+INSERT INTO insights_summary (insight_type, description, metric_value, severity, source_table)
+SELECT
+'funnel' AS insight_type,
+CONCAT(
+'Largest funnel bottleneck: ',
+stage_label,
+' with conversion ',
+ROUND(stage_value, 2),
+'%'
+) AS description,
+stage_value AS metric_value,
+'HIGH' AS severity,
+'funnel_summary' AS source_table
+FROM (
+SELECT
+CASE
+WHEN LEAST(
+COALESCE(pct_signup_to_browse, 1000),
+COALESCE(pct_browse_to_view, 1000),
+COALESCE(pct_view_to_addcart, 1000),
+COALESCE(pct_addcart_to_checkout, 1000),
+COALESCE(pct_checkout_to_payment, 1000)
+) = COALESCE(pct_signup_to_browse, 1000)
+THEN 'signup_to_browse'
+WHEN LEAST(
+COALESCE(pct_signup_to_browse, 1000),
+COALESCE(pct_browse_to_view, 1000),
+COALESCE(pct_view_to_addcart, 1000),
+COALESCE(pct_addcart_to_checkout, 1000),
+COALESCE(pct_checkout_to_payment, 1000)
+) = COALESCE(pct_browse_to_view, 1000)
+THEN 'browse_to_view'
+WHEN LEAST(
+COALESCE(pct_signup_to_browse, 1000),
+COALESCE(pct_browse_to_view, 1000),
+COALESCE(pct_view_to_addcart, 1000),
+COALESCE(pct_addcart_to_checkout, 1000),
+COALESCE(pct_checkout_to_payment, 1000)
+) = COALESCE(pct_view_to_addcart, 1000)
+THEN 'view_to_addcart'
+WHEN LEAST(
+COALESCE(pct_signup_to_browse, 1000),
+COALESCE(pct_browse_to_view, 1000),
+COALESCE(pct_view_to_addcart, 1000),
+COALESCE(pct_addcart_to_checkout, 1000),
+COALESCE(pct_checkout_to_payment, 1000)
+) = COALESCE(pct_addcart_to_checkout, 1000)
+THEN 'addcart_to_checkout'
+ELSE 'checkout_to_payment'
+END AS stage_label,
+LEAST(
+COALESCE(pct_signup_to_browse, 1000),
+COALESCE(pct_browse_to_view, 1000),
+COALESCE(pct_view_to_addcart, 1000),
+COALESCE(pct_addcart_to_checkout, 1000),
+COALESCE(pct_checkout_to_payment, 1000)
+) AS stage_value
+FROM funnel_summary
+LIMIT 1
+) t
+WHERE stage_value < 1000;
+-- 2) Retention: cohort with worst week-1 retention
+INSERT INTO insights_summary (insight_type, description, metric_value, related_date, severity, source_table)
+SELECT
+'retention' AS insight_type,
+CONCAT(
+'Worst week-1 retention: cohort ',
+cohort_week,
+' = ',
+ROUND(week_1_retention_pct, 2),
+'%'
+) AS description,
+week_1_retention_pct AS metric_value,
+cohort_start_date AS related_date,
+'HIGH' AS severity,
+'cohort_weekly_retention' AS source_table
+FROM cohort_weekly_retention
+WHERE week_1_retention_pct IS NOT NULL
+ORDER BY week_1_retention_pct ASC
+LIMIT 1;
+-- 3) Top revenue segment
+INSERT INTO insights_summary (insight_type, description, metric_value, related_segment, severity, source_table)
+SELECT
+'segment' AS insight_type,
+CONCAT(
+'Top revenue segment: ',
+segment_type, '=', segment_value,
+' revenue=',
+ROUND(total_revenue, 2)
+) AS description,
+total_revenue AS metric_value,
+CONCAT(segment_type, '=', segment_value) AS related_segment,
+'MEDIUM' AS severity,
+'segment_revenue_summary' AS source_table
+FROM segment_revenue_summary
+WHERE total_revenue IS NOT NULL
+ORDER BY total_revenue DESC
+LIMIT 1;
+-- 4) Largest segment anomaly (by absolute deviation)
+INSERT INTO insights_summary (
+insight_type,
+description,
+metric_value,
+related_segment,
+related_date,
+severity,
+source_table
+)
+SELECT
+'anomaly' AS insight_type,
+CONCAT(
+UPPER(anomaly_type),
+': ',
+metric_name,
+' ',
+ROUND(deviation_pct, 2),
+'% for ',
+segment_type, '=',
+segment_value,
+' on ',
+DATE_FORMAT(date, '%Y-%m-%d')
+) AS description,
+deviation_pct AS metric_value,
+CONCAT(segment_type, '=', segment_value) AS related_segment,
+date AS related_date,
+'HIGH' AS severity,
+'segment_anomaly_flags' AS source_table
+FROM segment_anomaly_flags
+WHERE anomaly_flag = 1
+AND deviation_pct IS NOT NULL
+ORDER BY ABS(deviation_pct) DESC
+LIMIT 1;
+-- 5) Highest-impact global daily anomaly (from daily_anomaly_flags)
+-- NOTE: use anomaly_type (SPIKE/DROP/...) instead of anomaly_flag number.
+INSERT INTO insights_summary (insight_type, description, metric_value, related_date, severity, source_table)
+SELECT
+'anomaly' AS insight_type,
+CONCAT(
+UPPER(anomaly_type),
+' DAILY: ',
+metric_name,
+' ',
+ROUND(deviation_pct, 2),
+'% on ',
+DATE_FORMAT(date, '%Y-%m-%d')
+) AS description,
+deviation_pct AS metric_value,
+date AS related_date,
+'HIGH' AS severity,
+'daily_anomaly_flags' AS source_table
+FROM daily_anomaly_flags
+WHERE anomaly_flag = 1
+AND deviation_pct IS NOT NULL
+ORDER BY ABS(deviation_pct) DESC
+LIMIT 1;
+-- Introspection / docs for insights_summary
+SHOW CREATE TABLE insights_summary;
+SELECT COUNT(*) AS insights_rows
+FROM insights_summary;
+-- Top 10 insights sorted by severity then recency
+SELECT
+insight_type,
+description,
+metric_value,
+related_segment,
+related_date,
+severity,
+source_table
+FROM insights_summary
+ORDER BY
+CASE severity WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC,
+created_at DESC
+LIMIT 10;
+-- Funnel insight cross-check (latest)
+SELECT
+insight_id,
+description,
+metric_value,
+source_table
+FROM insights_summary
+WHERE insight_type = 'funnel'
+ORDER BY created_at DESC
+LIMIT 1;
+-- Retention insight cross-check (lowest retention)
+SELECT
+insight_id,
+description,
+metric_value,
+related_date
+FROM insights_summary
+WHERE insight_type = 'retention'
+ORDER BY metric_value ASC
+LIMIT 1;
+-- Template for top anomaly cross-check:
+-- Replace 123 with a real insight_id from the previous queries.
+-- SELECT *
+-- FROM insights_summary
+-- WHERE insight_id = 123;
+-- One-line, human-readable list of top insights
+SELECT CONCAT(
+insight_type,
+': ',
+description,
+' (value=',
+ROUND(COALESCE(metric_value, 0), 2),
+', severity=',
+COALESCE(severity, 'LOW'),
+', source=',
+source_table,
+')'
+) AS one_line_insight
+FROM insights_summary
+ORDER BY
+CASE severity WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC,
+created_at DESC
+LIMIT 20;

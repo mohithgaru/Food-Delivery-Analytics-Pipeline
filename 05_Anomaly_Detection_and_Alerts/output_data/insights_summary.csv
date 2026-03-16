@@ -1,0 +1,5 @@
+1,funnel,Largest funnel bottleneck: checkout_to_payment with conversion 45.20%,45.2,,,HIGH,funnel_summary,2025-11-29 14:31:15
+2,retention,Worst week-1 retention: cohort 2023-W26 = 0.00%,0,,2023-06-26,HIGH,cohort_weekly_retention,2025-11-29 14:31:15
+3,segment,Top revenue segment: age_group=25-34 revenue=1857843.00,1857843,age_group=25-34,,MEDIUM,segment_revenue_summary,2025-11-29 14:31:15
+4,anomaly,SPIKE: revenue 3699.92% for city=Pune on 2023-01-11,3699.92,city=Pune,2023-01-11,HIGH,segment_anomaly_flags,2025-11-29 14:31:15
+5,anomaly,1 DAILY: revenue 593.07% on 2023-01-09,593.07,,2023-01-09,HIGH,daily_anomaly_flags,2025-11-29 14:31:15
